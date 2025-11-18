@@ -72,4 +72,17 @@
   .glow-emerald {
     box-shadow: 0 0 20px rgba(22, 217, 155, 0.3);
   }
+
+  .glow-emerald-text {
+    text-shadow: 0 0 20px rgba(22, 217, 155, 0.5);
+  }
+
+  /* Gradient backgrounds */
+  .bg-gradient-chat {
+    background: linear-gradient(135deg, #0F1115 0%, #0a1a1f 50%, #0F1115 100%);
+  }
+
+  .bg-gradient-glow {
+    background: radial-gradient(circle at 50% 50%, rgba(22, 217, 155, 0.1) 0%, transparent 70%);
+  }
 }
