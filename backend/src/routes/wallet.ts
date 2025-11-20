@@ -1,7 +1,7 @@
-import express from "express"
+import express, { Router } from "express"
 import { createWallet, importWallet, getBalance, initializeZcash, getWalletAddress } from "../services/zcashService.js"
 
-const router = express.Router()
+const router: Router = express.Router()
 
 // Initialize Zcash on server start
 initializeZcash({

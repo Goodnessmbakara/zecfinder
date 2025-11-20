@@ -5,11 +5,13 @@ const openai = new OpenAI({
 })
 
 export interface ParsedIntent {
-  action: "send" | "receive" | "balance" | "shield" | "unshield" | "query" | "unknown"
+  action: "send" | "receive" | "balance" | "shield" | "unshield" | "swap" | "query" | "unknown"
   amount?: number
   recipient?: string
   currency?: string
   isPrivate?: boolean
+  swapFrom?: string // e.g., "BTC", "SOL", "USDC"
+  swapTo?: string // e.g., "ZEC"
   originalCommand: string
 }
 
@@ -21,19 +23,23 @@ export async function parseIntent(userMessage: string): Promise<ParsedIntent> {
         {
           role: "system",
           content: `You are a Zcash wallet AI assistant. Parse user commands and extract:
-- action: send, receive, balance, shield, unshield, query, or unknown
+- action: send, receive, balance, shield, unshield, swap, query, or unknown
 - amount: numeric value if mentioned
 - recipient: address or identifier if mentioned
 - currency: ZEC, BTC, etc. (default: ZEC)
 - isPrivate: true if user wants private/shielded transaction
+- swapFrom: source asset for swaps (e.g., "BTC", "SOL", "USDC")
+- swapTo: destination asset for swaps (e.g., "ZEC")
 
 Return ONLY valid JSON in this format:
 {
-  "action": "send|receive|balance|shield|unshield|query|unknown",
+  "action": "send|receive|balance|shield|unshield|swap|query|unknown",
   "amount": number or null,
   "recipient": "address" or null,
   "currency": "ZEC" or other,
   "isPrivate": true/false,
+  "swapFrom": "asset name" or null,
+  "swapTo": "asset name" or null,
   "originalCommand": "user's original message"
 }`
         },

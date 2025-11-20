@@ -8,11 +8,23 @@ export interface ChatResponse {
     recipient?: string
     currency?: string
     isPrivate?: boolean
+    swapFrom?: string
+    swapTo?: string
     originalCommand: string
   }
   context?: {
     balance?: number
     address?: string
+    error?: string
+  }
+  execution?: {
+    success: boolean
+    status: "pending" | "success" | "failed"
+    txid?: string
+    operationId?: string
+    privacyLevel: "transparent" | "shielded" | "zero-link"
+    message: string
+    error?: string
   }
 }
 
@@ -115,6 +127,30 @@ export const api = {
 
     if (!response.ok) {
       throw new Error(`Send transaction error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  async confirmTransaction(intent: any): Promise<{
+    success: boolean
+    status: string
+    txid?: string
+    operationId?: string
+    privacyLevel: string
+    message: string
+    error?: string
+  }> {
+    const response = await fetch(`${API_BASE_URL}/api/transaction/confirm`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ intent, confirmed: true })
+    })
+
+    if (!response.ok) {
+      throw new Error(`Confirm transaction error: ${response.statusText}`)
     }
 
     return response.json()

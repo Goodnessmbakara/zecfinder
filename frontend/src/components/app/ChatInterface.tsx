@@ -5,6 +5,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { GenieLogo } from "./GenieLogo"
 import { SuggestedPrompts } from "./SuggestedPrompts"
+import { TransactionStatus } from "./TransactionStatus"
+import { TransactionConfirm } from "./TransactionConfirm"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -14,6 +16,15 @@ interface Message {
   content: string
   timestamp: Date
   isPrivate?: boolean
+  execution?: {
+    success: boolean
+    status: "pending" | "success" | "failed"
+    txid?: string
+    operationId?: string
+    privacyLevel: "transparent" | "shielded" | "zero-link"
+    message: string
+    error?: string
+  }
 }
 
 const initialMessages: Message[] = []
@@ -24,6 +35,10 @@ export function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("chat")
   const [showPrompts, setShowPrompts] = useState(true)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    intent: any
+    privacyLevel: "transparent" | "shielded" | "zero-link"
+  } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -52,12 +67,29 @@ export function ChatInterface() {
       // Call real API
       const response = await api.chat(textToSend)
       
+      // Check if execution requires confirmation
+      const requiresExecution = ["send", "shield", "unshield", "swap"].includes(response.intent.action)
+      const hasExecution = response.execution && requiresExecution
+      
+      // If execution exists but is pending or we need confirmation, show confirmation dialog
+      if (hasExecution && response.execution && response.execution.status === "pending" && !response.execution.txid) {
+        // Determine privacy level
+        const privacyLevel = response.execution.privacyLevel || 
+          (response.intent.isPrivate ? "shielded" : "transparent")
+        
+        setPendingConfirmation({
+          intent: response.intent,
+          privacyLevel
+        })
+      }
+      
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content: response.response,
         timestamp: new Date(),
         isPrivate: response.intent.isPrivate || false,
+        execution: response.execution
       }
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
@@ -71,6 +103,40 @@ export function ChatInterface() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleConfirmTransaction = async () => {
+    if (!pendingConfirmation) return
+
+    try {
+      const result = await api.confirmTransaction(pendingConfirmation.intent)
+      
+      // Update the last message with execution result
+      setMessages((prev) => {
+        const updated = [...prev]
+        const lastMessage = updated[updated.length - 1]
+        if (lastMessage && lastMessage.role === "assistant") {
+          lastMessage.execution = {
+            success: result.success,
+            status: result.status as "pending" | "success" | "failed",
+            txid: result.txid,
+            operationId: result.operationId,
+            privacyLevel: result.privacyLevel as "transparent" | "shielded" | "zero-link",
+            message: result.message,
+            error: result.error
+          }
+        }
+        return updated
+      })
+    } catch (error) {
+      console.error("Failed to confirm transaction:", error)
+    } finally {
+      setPendingConfirmation(null)
+    }
+  }
+
+  const handleCancelTransaction = () => {
+    setPendingConfirmation(null)
   }
 
   const handlePromptClick = (prompt: string) => {
@@ -166,6 +232,20 @@ export function ChatInterface() {
                             minute: "2-digit",
                           })}
                         </div>
+                        
+                        {/* Execution Status */}
+                        {message.execution && (
+                          <div className="mt-3">
+                            <TransactionStatus
+                              status={message.execution.status}
+                              txid={message.execution.txid}
+                              operationId={message.execution.operationId}
+                              privacyLevel={message.execution.privacyLevel}
+                              message={message.execution.message}
+                              error={message.execution.error}
+                            />
+                          </div>
+                        )}
                       </div>
                       {message.role === "user" && (
                         <div className="w-8 h-8 rounded-full bg-foreground/10 flex items-center justify-center flex-shrink-0">
@@ -236,6 +316,16 @@ export function ChatInterface() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Transaction Confirmation Dialog */}
+      {pendingConfirmation && (
+        <TransactionConfirm
+          intent={pendingConfirmation.intent}
+          privacyLevel={pendingConfirmation.privacyLevel}
+          onConfirm={handleConfirmTransaction}
+          onCancel={handleCancelTransaction}
+        />
       )}
 
       {activeTab === "history" && (
