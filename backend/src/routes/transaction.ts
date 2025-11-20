@@ -1,5 +1,5 @@
 import express, { Router } from "express"
-import { sendTransaction, shieldTransaction, unshieldTransaction } from "../services/zcashService.js"
+import { sendTransaction, shieldTransaction, unshieldTransaction, checkShieldedOperationStatus } from "../services/zcashService.js"
 import { executeIntent } from "../services/executionEngine.js"
 import { ParsedIntent } from "../services/aiAgent.js"
 import { createSwapIntent, checkIntentStatus, getIntentResult } from "../services/nearIntents.js"
@@ -127,6 +127,37 @@ router.get("/swap/:intentId/result", async (req, res) => {
     console.error("Get swap result error:", error)
     res.status(500).json({
       error: "Failed to get swap result",
+      message: error instanceof Error ? error.message : "Unknown error"
+    })
+  }
+})
+
+/**
+ * Check status of a shielded transaction operation (shield/unshield)
+ */
+router.get("/status/:operationId", async (req, res) => {
+  try {
+    const { operationId } = req.params
+
+    if (!operationId || typeof operationId !== "string") {
+      return res.status(400).json({ error: "Operation ID is required" })
+    }
+
+    const status = await checkShieldedOperationStatus(operationId)
+    
+    res.json({
+      success: true,
+      operationId,
+      status: status.status,
+      txid: status.txid,
+      error: status.error,
+      completed: status.status === "success",
+      failed: status.status === "failed" || status.error !== undefined
+    })
+  } catch (error) {
+    console.error("Check transaction status error:", error)
+    res.status(500).json({
+      error: "Failed to check transaction status",
       message: error instanceof Error ? error.message : "Unknown error"
     })
   }

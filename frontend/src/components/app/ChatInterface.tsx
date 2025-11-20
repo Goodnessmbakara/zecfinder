@@ -67,14 +67,17 @@ export function ChatInterface() {
       // Call real API
       const response = await api.chat(textToSend)
       
+      // Get execution from response
+      const execution = response.execution
+      
       // Check if execution requires confirmation
       const requiresExecution = ["send", "shield", "unshield", "swap"].includes(response.intent.action)
-      const hasExecution = response.execution && requiresExecution
+      const hasExecution = execution && requiresExecution
       
       // If execution exists but is pending or we need confirmation, show confirmation dialog
-      if (hasExecution && response.execution && response.execution.status === "pending" && !response.execution.txid) {
+      if (hasExecution && execution && execution.status === "pending" && !execution.txid) {
         // Determine privacy level
-        const privacyLevel = response.execution.privacyLevel || 
+        const privacyLevel = execution.privacyLevel || 
           (response.intent.isPrivate ? "shielded" : "transparent")
         
         setPendingConfirmation({
@@ -89,17 +92,38 @@ export function ChatInterface() {
         content: response.response,
         timestamp: new Date(),
         isPrivate: response.intent.isPrivate || false,
-        execution: response.execution
+        execution: execution
       }
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
-      const errorMessage: Message = {
+      // Enhanced error messages
+      let errorMessage = "Failed to process your request"
+      if (error instanceof Error) {
+        if (error.message.includes("Network") || error.message.includes("fetch")) {
+          errorMessage = "Unable to connect to the server. Please check your connection and try again."
+        } else if (error.message.includes("Wallet not initialized")) {
+          errorMessage = "Please create or import a wallet first to use this feature."
+        } else if (error.message.includes("Insufficient")) {
+          errorMessage = "Insufficient funds. Please check your balance and try again."
+        } else {
+          errorMessage = error.message
+        }
+      }
+      
+      const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `Error: ${error instanceof Error ? error.message : "Failed to process your request"}`,
+        content: `⚠️ ${errorMessage}`,
         timestamp: new Date(),
+        execution: {
+          success: false,
+          status: "failed",
+          privacyLevel: "transparent",
+          message: errorMessage,
+          error: error instanceof Error ? error.message : "Unknown error"
+        }
       }
-      setMessages((prev) => [...prev, errorMessage])
+      setMessages((prev) => [...prev, errorMsg])
     } finally {
       setIsLoading(false)
     }

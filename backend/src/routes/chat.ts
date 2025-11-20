@@ -33,7 +33,7 @@ router.post("/", async (req, res) => {
     }
 
     // Check if action requires execution
-    const requiresExecution = ["send", "shield", "unshield"].includes(intent.action)
+    const requiresExecution = ["send", "shield", "unshield", "swap"].includes(intent.action)
     let execution = undefined
 
     if (requiresExecution) {

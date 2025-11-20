@@ -154,6 +154,49 @@ export const api = {
     }
 
     return response.json()
+  },
+
+  async checkTransactionStatus(operationId: string): Promise<{
+    success: boolean
+    operationId: string
+    status: string
+    txid?: string
+    error?: string
+    completed: boolean
+    failed: boolean
+  }> {
+    const response = await fetch(`${API_BASE_URL}/api/transaction/status/${operationId}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error(`Check transaction status error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  async checkSwapStatus(intentId: string): Promise<{
+    id: string
+    status: "pending" | "executing" | "completed" | "failed"
+    createdAt: string
+    updatedAt: string
+  }> {
+    const response = await fetch(`${API_BASE_URL}/api/transaction/swap/${intentId}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error(`Check swap status error: ${response.statusText}`)
+    }
+
+    return response.json()
   }
 }
 

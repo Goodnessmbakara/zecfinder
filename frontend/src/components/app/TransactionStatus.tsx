@@ -1,5 +1,7 @@
 import { Shield, CheckCircle2, XCircle, Loader2, ExternalLink } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useEffect, useState } from "react"
+import { api } from "@/lib/api"
 
 interface TransactionStatusProps {
   status: "pending" | "success" | "failed"
@@ -8,16 +10,60 @@ interface TransactionStatusProps {
   privacyLevel: "transparent" | "shielded" | "zero-link"
   message: string
   error?: string
+  onStatusUpdate?: (newStatus: { status: "pending" | "success" | "failed"; txid?: string; error?: string }) => void
 }
 
 export function TransactionStatus({
-  status,
-  txid,
+  status: initialStatus,
+  txid: initialTxid,
   operationId,
   privacyLevel,
-  message,
-  error
+  message: initialMessage,
+  error: initialError,
+  onStatusUpdate
 }: TransactionStatusProps) {
+  const [status, setStatus] = useState<"pending" | "success" | "failed">(initialStatus)
+  const [txid, setTxid] = useState<string | undefined>(initialTxid)
+  const [error, setError] = useState<string | undefined>(initialError)
+  const [message, setMessage] = useState(initialMessage)
+  // Poll for status updates if we have an operationId and status is pending
+  useEffect(() => {
+    if (!operationId || status !== "pending") return
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const statusResult = await api.checkTransactionStatus(operationId)
+        
+        if (statusResult.completed && statusResult.txid) {
+          setStatus("success")
+          setTxid(statusResult.txid)
+          setMessage(`Transaction confirmed! TXID: ${statusResult.txid}`)
+          onStatusUpdate?.({ status: "success", txid: statusResult.txid })
+          clearInterval(pollInterval)
+        } else if (statusResult.failed || statusResult.error) {
+          setStatus("failed")
+          setError(statusResult.error || "Transaction failed")
+          setMessage(`Transaction failed: ${statusResult.error || "Unknown error"}`)
+          onStatusUpdate?.({ status: "failed", error: statusResult.error })
+          clearInterval(pollInterval)
+        }
+      } catch (err) {
+        console.error("Error polling transaction status:", err)
+        // Continue polling on error
+      }
+    }, 5000) // Poll every 5 seconds
+
+    // Cleanup after 5 minutes
+    const timeout = setTimeout(() => {
+      clearInterval(pollInterval)
+    }, 300000)
+
+    return () => {
+      clearInterval(pollInterval)
+      clearTimeout(timeout)
+    }
+  }, [operationId, status, onStatusUpdate])
+
   const isPrivate = privacyLevel === "shielded" || privacyLevel === "zero-link"
   const isPending = status === "pending"
   const isSuccess = status === "success"
