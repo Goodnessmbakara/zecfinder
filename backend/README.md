@@ -15,7 +15,7 @@ cp .env.example .env
 ```
 
 3. Set your environment variables in `.env`:
-- `OPENAI_API_KEY` - Your OpenAI API key
+- `GEMINI_API_KEY` - Your Google Gemini API key
 - `ZCASH_RPC_URL` - Zcash node RPC endpoint (default: http://localhost:8232)
 - `ZCASH_RPC_USER` - RPC username (if required)
 - `ZCASH_RPC_PASSWORD` - RPC password (if required)

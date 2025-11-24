@@ -75,6 +75,8 @@ cp .env.example .env
 ```
 
 4. Configure environment variables:
+
+**For Local Development:**
 ```env
 ZCASH_RPC_URL=http://localhost:8232
 ZCASH_RPC_USER=your_rpc_user
@@ -82,10 +84,26 @@ ZCASH_RPC_PASSWORD=your_rpc_password
 ZCASH_NETWORK=testnet
 NEAR_INTENTS_API_URL=https://api.near.org/intents
 NEAR_NETWORK=testnet
-OPENAI_API_KEY=your_openai_api_key
+GEMINI_API_KEY=your_gemini_api_key
 PORT=3001
 FRONTEND_URL=http://localhost:5173
 ```
+
+**For Cloud Deployment:**
+```env
+# See CLOUD_DEPLOYMENT.md for detailed cloud setup guide
+ZCASH_RPC_URL=http://YOUR_NODE_IP:8232  # Your cloud node IP/domain
+ZCASH_RPC_USER=secure_username_from_secrets_manager
+ZCASH_RPC_PASSWORD=secure_password_from_secrets_manager
+ZCASH_NETWORK=testnet
+NEAR_INTENTS_API_URL=https://api.near.org/intents
+NEAR_NETWORK=testnet
+GEMINI_API_KEY=your_gemini_api_key
+PORT=3001
+FRONTEND_URL=https://your-frontend-domain.com
+```
+
+**⚠️ Important:** For cloud deployment, you **must** set up a Zcash node (see Cloud Deployment section below).
 
 5. Start the backend server:
 ```bash
@@ -204,12 +222,154 @@ The zero-link routing algorithm selects UTXOs to minimize traceability:
 
 See `DEMO_SCRIPT.md` for detailed demo flow.
 
+## Cloud Deployment Guide
+
+### Zcash RPC Configuration for Cloud
+
+When deploying to the cloud, you **cannot** use `localhost:8232`. You have several options:
+
+#### Option 1: Self-Hosted Zcash Node (Recommended for Production)
+
+Deploy your own Zcash node in the cloud:
+
+**AWS/GCP/Azure Setup:**
+```bash
+# Install Zcash node on cloud instance
+# For Ubuntu/Debian:
+sudo apt-get update
+sudo apt-get install -y zcash
+
+# Configure zcash.conf
+rpcuser=your_secure_username
+rpcpassword=your_secure_password
+rpcbind=0.0.0.0  # Allow external connections
+rpcallowip=YOUR_APP_IP/32  # Restrict to your app's IP
+server=1
+testnet=1  # or 0 for mainnet
+```
+
+**Environment Variable:**
+```env
+ZCASH_RPC_URL=http://YOUR_NODE_IP:8232
+# or for HTTPS:
+ZCASH_RPC_URL=https://zcash-node.yourdomain.com:8232
+ZCASH_RPC_USER=your_secure_username
+ZCASH_RPC_PASSWORD=your_secure_password
+```
+
+**Security Best Practices:**
+- Use strong RPC credentials (long, random passwords)
+- Restrict RPC access to your application's IP only (`rpcallowip`)
+- Use HTTPS/TLS for RPC connections (set up reverse proxy with nginx)
+- Use VPC/private networking when possible
+- Enable firewall rules to restrict port 8232 access
+
+#### Option 2: Public RPC Endpoints (For Testing/Development)
+
+**Testnet Public Endpoints:**
+```env
+# Example testnet endpoints (verify availability before use)
+ZCASH_RPC_URL=http://testnet.z.cash:8232
+# or
+ZCASH_RPC_URL=https://zcash-testnet.example.com:8232
+```
+
+**⚠️ Important:** Public endpoints have severe limitations:
+- Rate limits (5 requests/minute typical)
+- Missing wallet methods (`getbalance`, `listunspent`)
+- Unreliable connections and timeouts
+
+**✅ Recommended:** Use Docker to run your own node. See `RPC_ENDPOINT_COMPARISON.md` for detailed analysis and setup guide.
+
+#### Option 3: VPN/Tunnel to Local Node
+
+If you have a Zcash node running locally or on another server:
+
+```bash
+# Use SSH tunnel
+ssh -L 8232:localhost:8232 user@your-node-server
+
+# Then in your cloud app:
+ZCASH_RPC_URL=http://localhost:8232
+```
+
+#### Option 4: Docker Container with Zcash Node (✅ Recommended for MVP/Demo)
+
+**Why Docker is Better:**
+- ✅ **No rate limits** - Your own node, unlimited requests
+- ✅ **All RPC methods work** - Full functionality (getbalance, listunspent, z_sendmany, etc.)
+- ✅ **Reliable** - No shared infrastructure issues
+- ✅ **Easy setup** - One command to start
+
+We've included a complete Docker setup in the repo. See `docker-compose.yml` and `RPC_ENDPOINT_COMPARISON.md` for details.
+
+**Quick Start:**
+```bash
+# Start Zcash testnet node
+docker-compose up -d zcash-testnet
+
+# Check sync status
+docker logs -f zcash-testnet
+
+# Test your node (should see 100% success!)
+cd backend
+ZCASH_RPC_URL=http://localhost:18232 ZCASH_RPC_USER=zcash ZCASH_RPC_PASSWORD=zcash123 pnpm tsx scripts/test-local-node.ts
+```
+
+**Environment Variable:**
+```env
+# For local Docker
+ZCASH_RPC_URL=http://localhost:18232
+ZCASH_RPC_USER=zcash
+ZCASH_RPC_PASSWORD=zcash123
+
+# For Docker Compose (backend service)
+ZCASH_RPC_URL=http://zcash-testnet:18232
+```
+
+### Cloud Deployment Checklist
+
+- [ ] Set up Zcash node in cloud (or use public endpoint for testing)
+- [ ] Configure RPC credentials securely
+- [ ] Set `ZCASH_RPC_URL` to your node's public IP or domain
+- [ ] Restrict RPC access via firewall/VPC rules
+- [ ] Use HTTPS/TLS for RPC connections (recommended)
+- [ ] Store RPC credentials in secure environment variables/secrets manager
+- [ ] Test RPC connection before deploying application
+- [ ] Monitor node sync status
+- [ ] Set up node monitoring and alerts
+
+### Environment Variables for Cloud
+
+```env
+# Production Cloud Configuration
+ZCASH_RPC_URL=https://zcash-node.yourdomain.com:8232
+ZCASH_RPC_USER=secure_username_from_secrets_manager
+ZCASH_RPC_PASSWORD=secure_password_from_secrets_manager
+ZCASH_NETWORK=testnet  # or mainnet
+
+# Use secrets manager (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
+# Never hardcode credentials in code or environment files
+```
+
+### Security Recommendations
+
+1. **Never expose RPC without authentication** - Always use `rpcuser` and `rpcpassword`
+2. **Use IP whitelisting** - Restrict `rpcallowip` to your application servers only
+3. **Use HTTPS** - Set up nginx/Traefik reverse proxy with SSL certificates
+4. **Store credentials securely** - Use cloud secrets managers, not environment files
+5. **Monitor access** - Log all RPC calls and monitor for suspicious activity
+6. **Use VPC/Private Networking** - Keep RPC communication within private network when possible
+
 ## Troubleshooting
 
 ### Zcash RPC Connection Issues
 - Verify Zcash node is running
 - Check RPC credentials
 - Ensure network matches (testnet/mainnet)
+- **For cloud:** Verify firewall rules allow connections from your app
+- **For cloud:** Check if node is accessible from your application's network
+- **For cloud:** Verify DNS resolution if using domain name
 
 ### Shielded Transaction Failures
 - Verify wallet has sufficient balance
