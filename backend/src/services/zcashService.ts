@@ -92,7 +92,18 @@ export async function getBalance(): Promise<WalletInfo> {
       zAddress = await getShieldedAddress()
     } catch (error) {
       // Shielded address may not be available, continue without it
-      console.error("Could not get shielded address:", error)
+      // But log specific error types for debugging
+      if (error instanceof Error) {
+        if (error.message.includes("reindexing")) {
+          console.warn("Shielded operations unavailable: Node is reindexing")
+        } else if (error.message.includes("deprecated") || error.message.includes("DISABLED")) {
+          console.warn("Shielded operations unavailable:", error.message)
+        } else {
+          console.error("Could not get shielded address:", error.message)
+        }
+      } else {
+        console.error("Could not get shielded address:", error)
+      }
     }
 
     return {
@@ -209,13 +220,22 @@ async function callZcashRPC(method: string, params: any[]): Promise<any> {
 
   const data = await response.json() as { error?: { message?: string; code?: number }; result?: any }
   if (data.error) {
-    throw new Error(data.error.message || `RPC error: ${data.error.code}`)
+    const errorMessage = data.error.message || `RPC error: ${data.error.code}`
+    // Provide more helpful error messages for common issues
+    if (errorMessage.includes("reindexing")) {
+      throw new Error("This wallet operation is disabled while the node is reindexing. Please wait for reindexing to complete before trying again.")
+    }
+    if (errorMessage.includes("DISABLED") && errorMessage.includes("deprecated")) {
+      throw new Error(errorMessage)
+    }
+    throw new Error(errorMessage)
   }
   return data.result
 }
 
 /**
  * Get or create a shielded address (z-address)
+ * Note: z_listaddresses is deprecated, using listaddresses instead
  */
 export async function getShieldedAddress(): Promise<string> {
   if (shieldedAddress) {
@@ -223,24 +243,59 @@ export async function getShieldedAddress(): Promise<string> {
   }
 
   try {
-    // First, try to get existing shielded addresses
-    const addresses = await callZcashRPC("z_listaddresses", [])
+    // First, try to get existing addresses using the new listaddresses method
+    // listaddresses returns unified addresses, so we need to filter for shielded addresses
+    const addresses = await callZcashRPC("listaddresses", [])
     
-    if (addresses && Array.isArray(addresses) && addresses.length > 0) {
-      // Use the first available shielded address
-      const firstAddress = addresses[0]
-      if (typeof firstAddress === "string") {
-        shieldedAddress = firstAddress
-        return shieldedAddress
+    if (addresses && Array.isArray(addresses)) {
+      // Filter for shielded addresses (z-addresses start with 'z')
+      // listaddresses returns objects with address info, or just strings
+      const shieldedAddrs = addresses.filter((addr: any) => {
+        const addressStr = typeof addr === "string" ? addr : (addr.address || addr.addr || "")
+        return addressStr.startsWith("z") && (addressStr.startsWith("zs") || addressStr.startsWith("zreg") || addressStr.startsWith("ztest"))
+      })
+      
+      if (shieldedAddrs.length > 0) {
+        // Use the first available shielded address
+        const firstAddress = shieldedAddrs[0]
+        const addressStr = typeof firstAddress === "string" ? firstAddress : (firstAddress.address || firstAddress.addr || firstAddress)
+        if (typeof addressStr === "string" && addressStr.startsWith("z")) {
+          shieldedAddress = addressStr
+          return shieldedAddress
+        }
       }
     }
 
     // If no shielded address exists, create a new one
-    const newAddress = await callZcashRPC("z_getnewaddress", ["sapling"])
-    shieldedAddress = newAddress
-    return newAddress
+    // Try z_getnewaddress first (sapling), fallback to unified address if needed
+    try {
+      const newAddress = await callZcashRPC("z_getnewaddress", ["sapling"])
+      if (newAddress && typeof newAddress === "string") {
+        shieldedAddress = newAddress
+        return newAddress
+      }
+    } catch (zNewError) {
+      // If z_getnewaddress fails, try getnewaddress with unified address type
+      console.warn("z_getnewaddress failed, trying getnewaddress:", zNewError)
+      try {
+        const unifiedAddress = await callZcashRPC("getnewaddress", ["", "sapling"])
+        if (unifiedAddress && typeof unifiedAddress === "string") {
+          shieldedAddress = unifiedAddress
+          return unifiedAddress
+        }
+      } catch (unifiedError) {
+        console.error("Both z_getnewaddress and getnewaddress failed")
+        throw unifiedError
+      }
+    }
+    
+    throw new Error("Failed to create or retrieve shielded address")
   } catch (error) {
     console.error("Error getting shielded address:", error)
+    // Check if it's a reindexing error
+    if (error instanceof Error && error.message.includes("reindexing")) {
+      throw new Error("Wallet operations are disabled while the node is reindexing. Please wait for reindexing to complete.")
+    }
     throw new Error(`Failed to get shielded address: ${error instanceof Error ? error.message : "Unknown error"}`)
   }
 }

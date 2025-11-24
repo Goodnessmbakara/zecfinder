@@ -1,3 +1,4 @@
+// Use environment variable if set, otherwise default to localhost for browser
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001"
 
 export interface ChatResponse {
@@ -26,6 +27,9 @@ export interface ChatResponse {
     message: string
     error?: string
   }
+  error?: string
+  errorType?: "api_key" | "network" | "rate_limit" | "parsing" | "invalid_response" | "validation" | "unknown"
+  message?: string
 }
 
 export interface WalletInfo {
@@ -35,20 +39,33 @@ export interface WalletInfo {
 }
 
 export const api = {
-  async chat(message: string): Promise<ChatResponse> {
+  async chat(
+    message: string, 
+    history?: Array<{ role: "user" | "assistant"; content: string }>
+  ): Promise<ChatResponse> {
     const response = await fetch(`${API_BASE_URL}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, history: history || [] })
     })
 
+    const data = await response.json().catch(() => ({}))
+    
     if (!response.ok) {
-      throw new Error(`Chat API error: ${response.statusText}`)
+      // Extract error message from response body if available
+      const errorMessage = data.message || data.error || `Chat API error: ${response.statusText}`
+      const error = new Error(errorMessage) as Error & { 
+        errorType?: string
+        statusCode?: number
+      }
+      error.errorType = data.errorType || "unknown"
+      error.statusCode = response.status
+      throw error
     }
 
-    return response.json()
+    return data
   },
 
   async createWallet(): Promise<{ address: string; mnemonic: string; privateKey: string }> {

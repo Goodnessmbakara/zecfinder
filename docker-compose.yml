@@ -1,0 +1,76 @@
+services:
+  zcash-testnet:
+    image: electriccoinco/zcashd:latest
+    platform: linux/amd64  # Use amd64 emulation for ARM64 Macs
+    container_name: zcash-testnet-node
+    restart: unless-stopped
+    ports:
+      - "18232:18232"  # Testnet RPC port
+    volumes:
+      - zcash-data:/srv/zcashd/.zcash
+      - zcash-params:/srv/zcashd/.zcash-params
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        zcashd -testnet -server=1 -rpcuser=zcash -rpcpassword=zcash123 \
+        -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -rpcport=18232 \
+        -printtoconsole -i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
+    healthcheck:
+      test: ["CMD-SHELL", "zcash-cli -testnet -rpcuser=zcash -rpcpassword=zcash123 getblockchaininfo || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s  # Give it 5 minutes to start initially
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zecfinder-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      - ZCASH_RPC_URL=http://zcash-testnet:18232
+      - ZCASH_RPC_USER=zcash
+      - ZCASH_RPC_PASSWORD=zcash123
+      - ZCASH_NETWORK=testnet
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - PORT=3001
+      - FRONTEND_URL=${FRONTEND_URL:-http://frontend:5173}
+    depends_on:
+      zcash-testnet:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:3001
+    container_name: zecfinder-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  zcash-data:
+    driver: local
+  zcash-params:
+    driver: local
+
+

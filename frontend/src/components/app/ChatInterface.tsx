@@ -64,8 +64,16 @@ export function ChatInterface() {
     setIsLoading(true)
 
     try {
-      // Call real API
-      const response = await api.chat(textToSend)
+      // Prepare conversation history (last 10 messages to avoid token limits)
+      const historyToSend = messages
+        .slice(-10)
+        .map((msg) => ({
+          role: msg.role,
+          content: msg.content
+        }))
+      
+      // Call real API with conversation history
+      const response = await api.chat(textToSend, historyToSend)
       
       // Get execution from response
       const execution = response.execution
@@ -86,6 +94,14 @@ export function ChatInterface() {
         })
       }
       
+      // Check if the response contains an error (even if status is 200)
+      if (response.error && response.errorType) {
+        // Backend returned an error in the response body
+        const error = new Error(response.message || response.error) as Error & { errorType?: string }
+        error.errorType = response.errorType
+        throw error
+      }
+      
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -96,24 +112,53 @@ export function ChatInterface() {
       }
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
-      // Enhanced error messages
+      // Enhanced error messages with specific handling based on error type
       let errorMessage = "Failed to process your request"
+      let errorType = "unknown"
+      
       if (error instanceof Error) {
-        if (error.message.includes("Network") || error.message.includes("fetch")) {
+        // Extract error type if available
+        const typedError = error as Error & { errorType?: string; statusCode?: number }
+        errorType = typedError.errorType || "unknown"
+        
+        // Handle specific error types
+        if (errorType === "api_key") {
+          errorMessage = "Gemini API key is missing or invalid. Please configure your GEMINI_API_KEY environment variable."
+        } else if (errorType === "network") {
+          errorMessage = "Network error connecting to the AI service. Please check your internet connection and try again."
+        } else if (errorType === "rate_limit") {
+          errorMessage = "Rate limit exceeded. Please wait a moment and try again."
+        } else if (errorType === "parsing") {
+          errorMessage = "Failed to parse the AI response. Please try rephrasing your request."
+        } else if (errorType === "invalid_response") {
+          errorMessage = "Received an invalid response from the AI service. Please try again."
+        } else if (errorType === "validation") {
+          errorMessage = error.message || "Invalid request. Please check your input and try again."
+        } else if (error.message.includes("Network") || error.message.includes("fetch")) {
           errorMessage = "Unable to connect to the server. Please check your connection and try again."
+          errorType = "network"
         } else if (error.message.includes("Wallet not initialized")) {
           errorMessage = "Please create or import a wallet first to use this feature."
         } else if (error.message.includes("Insufficient")) {
           errorMessage = "Insufficient funds. Please check your balance and try again."
+        } else if (error.message.includes("transaction") || error.message.includes("Transaction")) {
+          // Provide context-aware error messages for transaction-related errors
+          const lastUserMessage = messages.filter(m => m.role === "user").slice(-1)[0]
+          if (lastUserMessage) {
+            errorMessage = `Failed to process your request: "${lastUserMessage.content}". ${error.message}`
+          } else {
+            errorMessage = error.message || "An unexpected error occurred. Please try again."
+          }
         } else {
-          errorMessage = error.message
+          // Use the actual error message if available
+          errorMessage = error.message || "An unexpected error occurred. Please try again."
         }
       }
       
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `⚠️ ${errorMessage}`,
+        content: errorMessage,
         timestamp: new Date(),
         execution: {
           success: false,
@@ -239,6 +284,8 @@ export function ChatInterface() {
                           "rounded-2xl px-4 py-3 max-w-[80%]",
                           message.role === "user"
                             ? "bg-zec-indigo text-white"
+                            : message.execution?.status === "failed"
+                            ? "bg-red-500/10 text-red-400 border border-red-500/30"
                             : "bg-obsidian text-foreground border border-obsidian"
                         )}
                       >
@@ -246,15 +293,29 @@ export function ChatInterface() {
                           {message.isPrivate && message.role === "assistant" && (
                             <Shield className="w-4 h-4 text-electric-emerald flex-shrink-0 mt-0.5" />
                           )}
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                            {message.content}
-                          </p>
+                          <div className="flex-1">
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                              {message.content}
+                            </p>
+                            {message.role === "assistant" && messages.length > 2 && (
+                              <div className="mt-2 text-xs text-foreground/50 italic">
+                                (Context from {messages.length} previous messages)
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs mt-2 opacity-60">
-                          {message.timestamp.toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                        <div className="text-xs mt-2 opacity-60 flex items-center justify-between">
+                          <span>
+                            {message.timestamp.toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                          {message.execution && message.execution.status === "failed" && (
+                            <span className="text-red-400 text-xs ml-2">
+                              Transaction failed
+                            </span>
+                          )}
                         </div>
                         
                         {/* Execution Status */}
@@ -284,8 +345,9 @@ export function ChatInterface() {
                       <div className="w-8 h-8 rounded-full bg-zec-indigo flex items-center justify-center flex-shrink-0">
                         <Shield className="w-4 h-4 text-white" />
                       </div>
-                      <div className="bg-obsidian rounded-2xl px-4 py-3 border border-obsidian">
+                      <div className="bg-obsidian rounded-2xl px-4 py-3 border border-obsidian flex items-center gap-2">
                         <Loader2 className="w-5 h-5 text-zec-indigo animate-spin" />
+                        <span className="text-sm text-foreground/60">Thinking...</span>
                       </div>
                     </div>
                   )}
@@ -353,12 +415,76 @@ export function ChatInterface() {
       )}
 
       {activeTab === "history" && (
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="text-center">
-            <p className="text-foreground/60">No conversation history yet</p>
-            <p className="text-sm text-foreground/40 mt-2">
-              Your past conversations will appear here
-            </p>
+        <div className="flex-1 flex flex-col p-6 relative z-10">
+          <div className="max-w-3xl mx-auto w-full">
+            <h2 className="text-xl font-semibold mb-4 text-foreground">
+              Conversation History
+            </h2>
+            {messages.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-foreground/60">No conversation history yet</p>
+                <p className="text-sm text-foreground/40 mt-2">
+                  Your past conversations will appear here
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="text-sm text-foreground/60 mb-4">
+                  {messages.length} message{messages.length !== 1 ? "s" : ""} in this conversation
+                </div>
+                <div className="space-y-3">
+                  {messages.map((message, index) => (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "rounded-lg p-4 border",
+                        message.role === "user"
+                          ? "bg-zec-indigo/10 border-zec-indigo/30"
+                          : "bg-obsidian/50 border-obsidian"
+                      )}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={cn(
+                          "w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0",
+                          message.role === "user"
+                            ? "bg-zec-indigo text-white"
+                            : "bg-zec-indigo/20 text-zec-indigo"
+                        )}>
+                          {message.role === "user" ? "U" : "AI"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground/90 whitespace-pre-wrap break-words">
+                            {message.content}
+                          </p>
+                          <div className="mt-2 flex items-center gap-2 text-xs text-foreground/50">
+                            <span>
+                              {message.timestamp.toLocaleString([], {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            {message.execution && (
+                              <span className={cn(
+                                "px-2 py-0.5 rounded",
+                                message.execution.status === "success"
+                                  ? "bg-green-500/20 text-green-400"
+                                  : message.execution.status === "failed"
+                                  ? "bg-red-500/20 text-red-400"
+                                  : "bg-yellow-500/20 text-yellow-400"
+                              )}>
+                                {message.execution.status}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

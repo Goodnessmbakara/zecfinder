@@ -1,5 +1,5 @@
 import express, { Router } from "express"
-import { parseIntent, generateResponse } from "../services/aiAgent.js"
+import { parseIntent, generateResponse, AIAgentError } from "../services/aiAgent.js"
 import { getBalance, getWalletAddress } from "../services/zcashService.js"
 import { executeIntent } from "../services/executionEngine.js"
 
@@ -7,14 +7,57 @@ const router: Router = express.Router()
 
 router.post("/", async (req, res) => {
   try {
-    const { message } = req.body
+    const { message, history } = req.body
 
     if (!message || typeof message !== "string") {
-      return res.status(400).json({ error: "Message is required" })
+      return res.status(400).json({ 
+        error: "Message is required",
+        errorType: "validation",
+        message: "Please provide a valid message"
+      })
+    }
+
+    if (message.trim().length === 0) {
+      return res.status(400).json({ 
+        error: "Message cannot be empty",
+        errorType: "validation",
+        message: "Please enter a message"
+      })
+    }
+
+    // Validate history format if provided
+    let conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = []
+    if (history && Array.isArray(history)) {
+      conversationHistory = history.filter((msg: any) => 
+        msg && 
+        typeof msg === "object" && 
+        (msg.role === "user" || msg.role === "assistant") &&
+        typeof msg.content === "string"
+      ).map((msg: any) => ({
+        role: msg.role,
+        content: msg.content
+      }))
     }
 
     // Parse user intent
-    const intent = await parseIntent(message)
+    let intent
+    try {
+      intent = await parseIntent(message)
+    } catch (error) {
+      if (error instanceof AIAgentError) {
+        console.error(`[chat] Intent parsing failed (${error.type}):`, error.message)
+        return res.status(500).json({
+          error: error.message,
+          errorType: error.type,
+          message: error.message,
+          intent: {
+            action: "unknown",
+            originalCommand: message
+          }
+        })
+      }
+      throw error
+    }
 
     // Get wallet context if available
     let context: { balance?: number; address?: string; error?: string } = {}
@@ -57,8 +100,24 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // Generate AI response (with execution context if available)
-    const response = await generateResponse(intent, context)
+    // Generate AI response (with execution context and conversation history if available)
+    let response: string
+    try {
+      response = await generateResponse(intent, context, conversationHistory)
+    } catch (error) {
+      if (error instanceof AIAgentError) {
+        console.error(`[chat] Response generation failed (${error.type}):`, error.message)
+        return res.status(500).json({
+          error: error.message,
+          errorType: error.type,
+          message: error.message,
+          intent,
+          context,
+          execution
+        })
+      }
+      throw error
+    }
 
     res.json({
       response,
@@ -67,10 +126,13 @@ router.post("/", async (req, res) => {
       execution
     })
   } catch (error) {
-    console.error("Chat error:", error)
+    console.error("[chat] Unexpected error:", error)
+    const errorMessage = error instanceof Error ? error.message : "Unknown error"
     res.status(500).json({
       error: "Failed to process chat message",
-      message: error instanceof Error ? error.message : "Unknown error"
+      errorType: "unknown",
+      message: errorMessage,
+      details: process.env.NODE_ENV === "development" ? (error instanceof Error ? error.stack : undefined) : undefined
     })
   }
 })
