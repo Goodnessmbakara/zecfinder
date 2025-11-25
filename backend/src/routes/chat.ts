@@ -13,21 +13,52 @@ router.post("/", async (req, res) => {
   }
 
   // Set headers for streaming
-  res.setHeader("Content-Type", "text/plain");
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Transfer-Encoding", "chunked");
+  res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
 
   try {
     const stream = processRequestStream(username, message, conversationId);
     
+    // Handle stream errors
+    let hasError = false;
+    
     for await (const chunk of stream) {
-      res.write(chunk);
+      if (!res.headersSent) {
+        // Headers already sent, continue streaming
+      }
+      
+      try {
+        res.write(chunk);
+      } catch (writeError) {
+        // Client disconnected or write failed
+        console.error("Error writing chunk:", writeError);
+        hasError = true;
+        break;
+      }
     }
     
-    res.end();
+    if (!hasError) {
+      res.end();
+    }
   } catch (error) {
-    console.error("Chat error:", error);
-    res.write("\nError processing request.");
-    res.end();
+    console.error("Chat route error:", error);
+    
+    // Try to send error message if connection is still open
+    try {
+      const errorMessage = error instanceof Error 
+        ? `\n❌ Error: ${error.message}\n\nPlease try again or contact support if the issue persists.\n`
+        : "\n❌ Error processing request. Please try again.\n";
+      
+      if (!res.headersSent) {
+        res.status(500);
+      }
+      res.write(errorMessage);
+      res.end();
+    } catch (writeError) {
+      // Connection already closed, just log
+      console.error("Could not send error message to client:", writeError);
+    }
   }
 });
 
