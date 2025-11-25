@@ -18,6 +18,7 @@ import cors from "cors"
 import chatRoutes from "./routes/chat.js"
 import walletRoutes from "./routes/wallet.js"
 import transactionRoutes from "./routes/transaction.js"
+import { initializeDatabase } from "./db/database.js"
 
 // Log environment variable status (without exposing values)
 console.log("Environment variables loaded:")
@@ -52,8 +53,14 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   res.status(500).json({ error: "Internal server error", message: err.message })
 })
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-  console.log(`Frontend URL: ${FRONTEND_URL}`)
+// Initialize Database then start server
+initializeDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`)
+    console.log(`Frontend URL: ${FRONTEND_URL}`)
+  })
+}).catch(err => {
+  console.error("Failed to initialize database:", err)
+  process.exit(1)
 })
 

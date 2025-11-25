@@ -1,5 +1,4 @@
-import { Config, getUTXOS, buildTx, signAndFinalize, sendRawTransaction } from "@mayaprotocol/zcash-js"
-import crypto from "crypto"
+import { Config } from "@mayaprotocol/zcash-js"
 
 export interface WalletInfo {
   address: string
@@ -16,9 +15,6 @@ export interface ZcashConfig {
 }
 
 let zcashConfig: ZcashConfig | null = null
-let walletAddress: string | null = null
-let privateKey: string | null = null
-let shieldedAddress: string | null = null
 
 export function initializeZcash(config: ZcashConfig) {
   zcashConfig = config
@@ -37,162 +33,167 @@ export function getZcashConfig(): Config | null {
   }
 }
 
-export async function createWallet(): Promise<{ address: string; mnemonic: string; privateKey: string }> {
-  // For MVP, generate a simple wallet structure
-  // In production, use proper Zcash wallet libraries
-  const privateKeyBytes = crypto.randomBytes(32)
-  const privateKeyHex = privateKeyBytes.toString("hex")
-  
-  // Generate a testnet address (simplified for MVP)
-  // In production, use proper address generation from private key
-  const address = `t1${crypto.randomBytes(20).toString("hex")}`
-  
-  // Generate mnemonic (simplified - use proper BIP39 library in production)
-  const mnemonic = generateMnemonic()
-  
-  walletAddress = address
-  privateKey = privateKeyHex
-  
-  return { address, mnemonic, privateKey: privateKeyHex }
-}
+/**
+ * Create a new wallet (addresses) on the Zcash node.
+ * Returns the Transparent Address, Private Key (WIF), and Shielded Address.
+ */
+export async function createWallet(): Promise<{ address: string; privateKey: string; shieldedAddress: string }> {
+  try {
+    // 1. Generate Transparent Address
+    const address = await callZcashRPC("getnewaddress", [])
+    
+    // 2. Generate Shielded Address (Sapling)
+    let shieldedAddress = ""
+    try {
+      shieldedAddress = await callZcashRPC("z_getnewaddress", ["sapling"])
+    } catch (e) {
+      console.warn("z_getnewaddress failed, trying getnewaddress for unified/sapling", e)
+      // Fallback or handle error
+      shieldedAddress = await callZcashRPC("getnewaddress", ["", "sapling"]) // Attempt unified if supported
+    }
 
-export async function importWallet(mnemonic: string): Promise<{ address: string; privateKey: string }> {
-  // For MVP, simplified import
-  // In production, derive private key and address from mnemonic properly
-  const privateKeyBytes = crypto.randomBytes(32)
-  const privateKeyHex = privateKeyBytes.toString("hex")
-  const address = `t1${crypto.randomBytes(20).toString("hex")}`
-  
-  walletAddress = address
-  privateKey = privateKeyHex
-  
-  return { address, privateKey: privateKeyHex }
-}
+    // 3. Get Private Key (for backup/DB purposes, though Node manages it)
+    const privateKey = await callZcashRPC("dumpprivkey", [address])
 
-export async function getBalance(): Promise<WalletInfo> {
-  if (!walletAddress) {
-    throw new Error("Wallet not initialized")
+    return { address, privateKey, shieldedAddress }
+  } catch (error) {
+    console.error("Error creating wallet:", error)
+    throw error
   }
+}
 
+/**
+ * Get balance for specific addresses.
+ */
+export async function getBalance(address: string, shieldedAddress?: string): Promise<WalletInfo> {
   const config = getZcashConfig()
   if (!config) {
     throw new Error("Zcash not configured")
   }
 
   try {
-    // Get transparent balance
-    const transparentBalance = await callZcashRPC("getreceivedbyaddress", [walletAddress, 0])
-    const balance = transparentBalance ? parseFloat(transparentBalance) / 100000000 : 0
+    // 1. Get Transparent Balance using listunspent for specific address
+    // listunspent minconf maxconf [addresses]
+    const utxos = await callZcashRPC("listunspent", [0, 9999999, [address]])
+    const balance = utxos.reduce((acc: number, utxo: any) => acc + utxo.amount, 0)
 
-    // Get shielded balance
+    // 2. Get Shielded Balance
     let shieldedBal = 0
-    let zAddress: string | undefined = undefined
-    try {
-      shieldedBal = await getShieldedBalance()
-      zAddress = await getShieldedAddress()
-    } catch (error) {
-      // Shielded address may not be available, continue without it
-      // But log specific error types for debugging
-      if (error instanceof Error) {
-        if (error.message.includes("reindexing")) {
-          console.warn("Shielded operations unavailable: Node is reindexing")
-        } else if (error.message.includes("deprecated") || error.message.includes("DISABLED")) {
-          console.warn("Shielded operations unavailable:", error.message)
-        } else {
-          console.error("Could not get shielded address:", error.message)
-        }
-      } else {
-        console.error("Could not get shielded address:", error)
+    if (shieldedAddress) {
+      try {
+        const zBal = await callZcashRPC("z_getbalance", [shieldedAddress])
+        shieldedBal = typeof zBal === 'string' ? parseFloat(zBal) : zBal
+      } catch (e) {
+        console.warn("Failed to get shielded balance", e)
       }
     }
 
     return {
-      address: walletAddress,
+      address,
       balance,
       shieldedBalance: shieldedBal,
-      shieldedAddress: zAddress
+      shieldedAddress
     }
   } catch (error) {
     console.error("Error getting balance:", error)
-    // Return mock balance for MVP if RPC fails
-    try {
-      const zAddress = await getShieldedAddress()
-      return {
-        address: walletAddress,
-        balance: 0,
-        shieldedBalance: 0,
-        shieldedAddress: zAddress
-      }
-    } catch {
-      return {
-        address: walletAddress,
-        balance: 0,
-        shieldedBalance: 0
-      }
+    // Return zero values if RPC fails, but log error
+    return {
+      address,
+      balance: 0,
+      shieldedBalance: 0,
+      shieldedAddress
     }
   }
 }
 
+/**
+ * Send Transaction (Transparent -> Transparent/Shielded)
+ * Uses z_sendmany which handles both t and z inputs/outputs if keys are in wallet.
+ */
 export async function sendTransaction(
+  fromAddress: string,
   toAddress: string,
-  amount: number,
-  isPrivate: boolean = false
+  amount: number
 ): Promise<string> {
-  if (!walletAddress || !privateKey) {
-    throw new Error("Wallet not initialized")
-  }
-
-  const config = getZcashConfig()
-  if (!config) {
-    throw new Error("Zcash not configured")
-  }
-
   try {
-    // Get UTXOs
-    const utxos = await getUTXOS(walletAddress, config)
-
-    // Convert amount to satoshis (zatoshi for Zcash)
-    const amountZatoshi = Math.floor(amount * 100000000)
-
-    // Build transaction
-    const tx = await buildTx(
-      0, // current block height (should fetch from RPC in production)
-      walletAddress,
-      toAddress,
-      amountZatoshi,
-      utxos,
-      false // memo transaction
-    )
-
-    // Sign transaction
-    const signedTx = await signAndFinalize(
-      tx.height,
-      privateKey,
-      tx.inputs,
-      tx.outputs
-    )
-
-    // Send transaction
-    const txid = await sendRawTransaction(signedTx, config)
-    return txid
+    const params = [
+      fromAddress,
+      [{ address: toAddress, amount: amount }],
+      1, // minconf
+      0.0001 // fee
+    ]
+    return await callZcashRPC("z_sendmany", params)
   } catch (error) {
     console.error("Error sending transaction:", error)
     throw new Error(`Failed to send transaction: ${error instanceof Error ? error.message : "Unknown error"}`)
   }
 }
 
-export function getWalletAddress(): string | null {
-  return walletAddress
+/**
+ * Shield Transaction: Transparent -> Shielded
+ */
+export async function shieldTransaction(fromAddress: string, toShieldedAddress: string, amount: number): Promise<string> {
+  try {
+    // z_sendmany from t-address to z-address
+    const params = [
+      fromAddress,
+      [{ address: toShieldedAddress, amount: amount }],
+      1, // minconf
+      0.0001 // fee
+    ]
+    return await callZcashRPC("z_sendmany", params)
+  } catch (error) {
+    console.error("Error shielding transaction:", error)
+    throw new Error(`Failed to shield transaction: ${error instanceof Error ? error.message : "Unknown error"}`)
+  }
 }
 
-function generateMnemonic(): string {
-  // Simplified mnemonic generation for MVP
-  // In production, use proper BIP39 library
-  const words = [
-    "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract",
-    "absurd", "abuse", "access", "accident", "account", "accuse", "achieve", "acid"
-  ]
-  return Array.from({ length: 12 }, () => words[Math.floor(Math.random() * words.length)]).join(" ")
+/**
+ * Unshield Transaction: Shielded -> Transparent
+ */
+export async function unshieldTransaction(fromShieldedAddress: string, toTransparentAddress: string, amount: number): Promise<string> {
+  try {
+    const params = [
+      fromShieldedAddress,
+      [{ address: toTransparentAddress, amount: amount }],
+      1, // minconf
+      0.0001 // fee
+    ]
+    return await callZcashRPC("z_sendmany", params)
+  } catch (error) {
+    console.error("Error unshielding transaction:", error)
+    throw new Error(`Failed to unshield transaction: ${error instanceof Error ? error.message : "Unknown error"}`)
+  }
+}
+
+/**
+ * Check operation status
+ */
+export async function checkShieldedOperationStatus(operationId: string): Promise<{
+  status: string
+  txid?: string
+  error?: string
+}> {
+  try {
+    const status = await callZcashRPC("z_getoperationstatus", [[operationId]])
+    
+    if (status && status.length > 0) {
+      const operation = status[0]
+      return {
+        status: operation.status || "unknown",
+        txid: operation.result?.txid,
+        error: operation.error?.message
+      }
+    }
+    
+    return { status: "unknown" }
+  } catch (error) {
+    console.error("Error checking operation status:", error)
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error"
+    }
+  }
 }
 
 /**
@@ -221,199 +222,14 @@ async function callZcashRPC(method: string, params: any[]): Promise<any> {
   const data = await response.json() as { error?: { message?: string; code?: number }; result?: any }
   if (data.error) {
     const errorMessage = data.error.message || `RPC error: ${data.error.code}`
-    // Provide more helpful error messages for common issues
     if (errorMessage.includes("reindexing")) {
-      throw new Error("This wallet operation is disabled while the node is reindexing. Please wait for reindexing to complete before trying again.")
-    }
-    if (errorMessage.includes("DISABLED") && errorMessage.includes("deprecated")) {
-      throw new Error(errorMessage)
+      throw new Error("Node is reindexing. Please wait.")
     }
     throw new Error(errorMessage)
   }
   return data.result
 }
 
-/**
- * Get or create a shielded address (z-address)
- * Note: z_listaddresses is deprecated, using listaddresses instead
- */
-export async function getShieldedAddress(): Promise<string> {
-  if (shieldedAddress) {
-    return shieldedAddress
-  }
-
-  try {
-    // First, try to get existing addresses using the new listaddresses method
-    // listaddresses returns unified addresses, so we need to filter for shielded addresses
-    const addresses = await callZcashRPC("listaddresses", [])
-    
-    if (addresses && Array.isArray(addresses)) {
-      // Filter for shielded addresses (z-addresses start with 'z')
-      // listaddresses returns objects with address info, or just strings
-      const shieldedAddrs = addresses.filter((addr: any) => {
-        const addressStr = typeof addr === "string" ? addr : (addr.address || addr.addr || "")
-        return addressStr.startsWith("z") && (addressStr.startsWith("zs") || addressStr.startsWith("zreg") || addressStr.startsWith("ztest"))
-      })
-      
-      if (shieldedAddrs.length > 0) {
-        // Use the first available shielded address
-        const firstAddress = shieldedAddrs[0]
-        const addressStr = typeof firstAddress === "string" ? firstAddress : (firstAddress.address || firstAddress.addr || firstAddress)
-        if (typeof addressStr === "string" && addressStr.startsWith("z")) {
-          shieldedAddress = addressStr
-          return shieldedAddress
-        }
-      }
-    }
-
-    // If no shielded address exists, create a new one
-    // Try z_getnewaddress first (sapling), fallback to unified address if needed
-    try {
-      const newAddress = await callZcashRPC("z_getnewaddress", ["sapling"])
-      if (newAddress && typeof newAddress === "string") {
-        shieldedAddress = newAddress
-        return newAddress
-      }
-    } catch (zNewError) {
-      // If z_getnewaddress fails, try getnewaddress with unified address type
-      console.warn("z_getnewaddress failed, trying getnewaddress:", zNewError)
-      try {
-        const unifiedAddress = await callZcashRPC("getnewaddress", ["", "sapling"])
-        if (unifiedAddress && typeof unifiedAddress === "string") {
-          shieldedAddress = unifiedAddress
-          return unifiedAddress
-        }
-      } catch (unifiedError) {
-        console.error("Both z_getnewaddress and getnewaddress failed")
-        throw unifiedError
-      }
-    }
-    
-    throw new Error("Failed to create or retrieve shielded address")
-  } catch (error) {
-    console.error("Error getting shielded address:", error)
-    // Check if it's a reindexing error
-    if (error instanceof Error && error.message.includes("reindexing")) {
-      throw new Error("Wallet operations are disabled while the node is reindexing. Please wait for reindexing to complete.")
-    }
-    throw new Error(`Failed to get shielded address: ${error instanceof Error ? error.message : "Unknown error"}`)
-  }
-}
-
-/**
- * Get shielded balance for the wallet
- */
-export async function getShieldedBalance(): Promise<number> {
-  try {
-    const zAddress = await getShieldedAddress()
-    const balance = await callZcashRPC("z_getbalance", [zAddress])
-    return balance ? parseFloat(balance) / 100000000 : 0 // Convert from zatoshi to ZEC
-  } catch (error) {
-    console.error("Error getting shielded balance:", error)
-    return 0
-  }
-}
-
-/**
- * Shield transaction: Transfer from transparent (t-address) to shielded (z-address)
- */
-export async function shieldTransaction(amount: number): Promise<string> {
-  if (!walletAddress) {
-    throw new Error("Wallet not initialized")
-  }
-
-  try {
-    const zAddress = await getShieldedAddress()
-    const amountZatoshi = Math.floor(amount * 100000000)
-
-    // z_sendmany parameters:
-    // fromaddress: transparent address
-    // amounts: array of {address, amount} objects
-    // minconf: minimum confirmations (default 1)
-    // fee: transaction fee in zatoshis (optional)
-    const params = [
-      walletAddress, // fromaddress
-      [
-        {
-          address: zAddress,
-          amount: amountZatoshi
-        }
-      ],
-      1, // minconf
-      null // fee (let node calculate)
-    ]
-
-    const operationId = await callZcashRPC("z_sendmany", params)
-    return operationId
-  } catch (error) {
-    console.error("Error shielding transaction:", error)
-    throw new Error(`Failed to shield transaction: ${error instanceof Error ? error.message : "Unknown error"}`)
-  }
-}
-
-/**
- * Unshield transaction: Transfer from shielded (z-address) to transparent (t-address)
- */
-export async function unshieldTransaction(amount: number, toAddress?: string): Promise<string> {
-  if (!walletAddress) {
-    throw new Error("Wallet not initialized")
-  }
-
-  try {
-    const zAddress = await getShieldedAddress()
-    const targetAddress = toAddress || walletAddress
-    const amountZatoshi = Math.floor(amount * 100000000)
-
-    // z_sendmany parameters for unshielding:
-    // fromaddress: shielded address
-    // amounts: array of {address, amount} objects (transparent address)
-    const params = [
-      zAddress, // fromaddress (shielded)
-      [
-        {
-          address: targetAddress,
-          amount: amountZatoshi
-        }
-      ],
-      1, // minconf
-      null // fee
-    ]
-
-    const operationId = await callZcashRPC("z_sendmany", params)
-    return operationId
-  } catch (error) {
-    console.error("Error unshielding transaction:", error)
-    throw new Error(`Failed to unshield transaction: ${error instanceof Error ? error.message : "Unknown error"}`)
-  }
-}
-
-/**
- * Check the status of a shielded transaction operation
- */
-export async function checkShieldedOperationStatus(operationId: string): Promise<{
-  status: string
-  txid?: string
-  error?: string
-}> {
-  try {
-    const status = await callZcashRPC("z_getoperationstatus", [[operationId]])
-    
-    if (status && status.length > 0) {
-      const operation = status[0]
-      return {
-        status: operation.status || "unknown",
-        txid: operation.result?.txid,
-        error: operation.error?.message
-      }
-    }
-    
-    return { status: "unknown" }
-  } catch (error) {
-    console.error("Error checking operation status:", error)
-    return {
-      status: "error",
-      error: error instanceof Error ? error.message : "Unknown error"
-    }
-  }
-}
+// Deprecated/Unused functions from previous implementation can be removed or kept as stubs if needed by other files
+// For now, I've replaced the core logic.
 

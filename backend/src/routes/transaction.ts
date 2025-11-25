@@ -3,12 +3,17 @@ import { sendTransaction, shieldTransaction, unshieldTransaction, checkShieldedO
 import { executeIntent } from "../services/executionEngine.js"
 import { ParsedIntent } from "../services/aiAgent.js"
 import { createSwapIntent, checkIntentStatus, getIntentResult } from "../services/nearIntents.js"
+import { getUser } from "../db/database.js"
 
 const router: Router = express.Router()
 
 router.post("/send", async (req, res) => {
   try {
-    const { toAddress, amount, isPrivate } = req.body
+    const { toAddress, amount, isPrivate, username } = req.body
+
+    if (!username) {
+      return res.status(400).json({ error: "Username is required" })
+    }
 
     if (!toAddress || typeof toAddress !== "string") {
       return res.status(400).json({ error: "Recipient address is required" })
@@ -18,14 +23,19 @@ router.post("/send", async (req, res) => {
       return res.status(400).json({ error: "Valid amount is required" })
     }
 
-    const txid = await sendTransaction(toAddress, amount, isPrivate || false)
+    const user = await getUser(username);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" })
+    }
+
+    // For now, we ignore isPrivate flag or handle it by sending from shielded if possible?
+    // z_sendmany handles transparent->transparent or transparent->shielded automatically based on addresses.
+    const txid = await sendTransaction(user.wallet_address, toAddress, amount)
 
     res.json({
       success: true,
       txid,
-      message: isPrivate
-        ? "Private transaction sent successfully"
-        : "Transaction sent successfully"
+      message: "Transaction sent successfully"
     })
   } catch (error) {
     console.error("Send transaction error:", error)
@@ -38,7 +48,11 @@ router.post("/send", async (req, res) => {
 
 router.post("/confirm", async (req, res) => {
   try {
-    const { intent, confirmed } = req.body
+    const { intent, confirmed, username } = req.body
+
+    if (!username) {
+      return res.status(400).json({ error: "Username is required" })
+    }
 
     if (!intent || typeof intent !== "object") {
       return res.status(400).json({ error: "Intent is required" })
@@ -49,7 +63,7 @@ router.post("/confirm", async (req, res) => {
     }
 
     // Execute the intent
-    const execution = await executeIntent(intent as ParsedIntent)
+    const execution = await executeIntent(intent as ParsedIntent, username)
 
     res.json({
       success: execution.success,

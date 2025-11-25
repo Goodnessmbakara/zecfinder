@@ -1,494 +1,371 @@
-import { useState, useRef, useEffect } from "react"
-import { Shield, Loader2, Mic, Plus, Globe, Headphones } from "lucide-react"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { GenieLogo } from "./GenieLogo"
-import { SuggestedPrompts } from "./SuggestedPrompts"
-import { TransactionStatus } from "./TransactionStatus"
-import { TransactionConfirm } from "./TransactionConfirm"
-import { api } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import React, { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mic, Send, StopCircle, Menu, Plus, MessageSquare } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 interface Message {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: Date
-  isPrivate?: boolean
-  execution?: {
-    success: boolean
-    status: "pending" | "success" | "failed"
-    txid?: string
-    operationId?: string
-    privacyLevel: "transparent" | "shielded" | "zero-link"
-    message: string
-    error?: string
-  }
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
 }
 
-const initialMessages: Message[] = []
+interface Conversation {
+  id: number;
+  title: string;
+  created_at: string;
+}
 
-export function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>(initialMessages)
-  const [input, setInput] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState("chat")
-  const [showPrompts, setShowPrompts] = useState(true)
-  const [pendingConfirmation, setPendingConfirmation] = useState<{
-    intent: any
-    privacyLevel: "transparent" | "shielded" | "zero-link"
-  } | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+export const ChatInterface = () => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConvId, setCurrentConvId] = useState<number | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Fetch history on mount
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      const username = "testuser"; // TODO: Context
+      const res = await fetch(`http://localhost:3001/api/chat/history?username=${username}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch history", e);
+    }
+  };
+
+  const loadConversation = async (id: number) => {
+    setCurrentConvId(id);
+    try {
+      const res = await fetch(`http://localhost:3001/api/chat/history/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        // Map DB messages to UI messages
+        const uiMessages: Message[] = data.map((m: any) => ({
+          id: m.id.toString(),
+          role: m.role,
+          content: m.content,
+          timestamp: new Date(m.created_at).getTime()
+        }));
+        setMessages(uiMessages);
+      }
+    } catch (e) {
+      console.error("Failed to load conversation", e);
+    }
+  };
+
+  const startNewChat = () => {
+    setCurrentConvId(null);
+    setMessages([]);
+    setInput('');
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+    scrollToBottom();
+  }, [messages]);
 
-  const handleSend = async (promptText?: string) => {
-    const textToSend = promptText || input.trim()
-    if (!textToSend || isLoading) return
+  const handleSend = async () => {
+    if (!input.trim()) return;
 
-    const userMessage: Message = {
+    const userMsg: Message = {
       id: Date.now().toString(),
-      role: "user",
-      content: textToSend,
-      timestamp: new Date(),
-    }
+      role: 'user',
+      content: input,
+      timestamp: Date.now(),
+    };
 
-    setMessages((prev) => [...prev, userMessage])
-    setInput("")
-    setShowPrompts(false)
-    setIsLoading(true)
+    setMessages((prev) => [...prev, userMsg]);
+    setInput('');
+    setIsLoading(true);
 
-    try {
-      // Prepare conversation history (last 10 messages to avoid token limits)
-      const historyToSend = messages
-        .slice(-10)
-        .map((msg) => ({
-          role: msg.role,
-          content: msg.content
-        }))
-      
-      // Call real API with conversation history
-      const response = await api.chat(textToSend, historyToSend)
-      
-      // Get execution from response
-      const execution = response.execution
-      
-      // Check if execution requires confirmation
-      const requiresExecution = ["send", "shield", "unshield", "swap"].includes(response.intent.action)
-      const hasExecution = execution && requiresExecution
-      
-      // If execution exists but is pending or we need confirmation, show confirmation dialog
-      if (hasExecution && execution && execution.status === "pending" && !execution.txid) {
-        // Determine privacy level
-        const privacyLevel = execution.privacyLevel || 
-          (response.intent.isPrivate ? "shielded" : "transparent")
-        
-        setPendingConfirmation({
-          intent: response.intent,
-          privacyLevel
-        })
-      }
-      
-      // Check if the response contains an error (even if status is 200)
-      if (response.error && response.errorType) {
-        // Backend returned an error in the response body
-        const error = new Error(response.message || response.error) as Error & { errorType?: string }
-        error.errorType = response.errorType
-        throw error
-      }
-      
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: response.response,
-        timestamp: new Date(),
-        isPrivate: response.intent.isPrivate || false,
-        execution: execution
-      }
-      setMessages((prev) => [...prev, assistantMessage])
-    } catch (error) {
-      // Enhanced error messages with specific handling based on error type
-      let errorMessage = "Failed to process your request"
-      let errorType = "unknown"
-      
-      if (error instanceof Error) {
-        // Extract error type if available
-        const typedError = error as Error & { errorType?: string; statusCode?: number }
-        errorType = typedError.errorType || "unknown"
-        
-        // Handle specific error types
-        if (errorType === "api_key") {
-          errorMessage = "Gemini API key is missing or invalid. Please configure your GEMINI_API_KEY environment variable."
-        } else if (errorType === "network") {
-          errorMessage = "Network error connecting to the AI service. Please check your internet connection and try again."
-        } else if (errorType === "rate_limit") {
-          errorMessage = "Rate limit exceeded. Please wait a moment and try again."
-        } else if (errorType === "parsing") {
-          errorMessage = "Failed to parse the AI response. Please try rephrasing your request."
-        } else if (errorType === "invalid_response") {
-          errorMessage = "Received an invalid response from the AI service. Please try again."
-        } else if (errorType === "validation") {
-          errorMessage = error.message || "Invalid request. Please check your input and try again."
-        } else if (error.message.includes("Network") || error.message.includes("fetch")) {
-          errorMessage = "Unable to connect to the server. Please check your connection and try again."
-          errorType = "network"
-        } else if (error.message.includes("Wallet not initialized")) {
-          errorMessage = "Please create or import a wallet first to use this feature."
-        } else if (error.message.includes("Insufficient")) {
-          errorMessage = "Insufficient funds. Please check your balance and try again."
-        } else if (error.message.includes("transaction") || error.message.includes("Transaction")) {
-          // Provide context-aware error messages for transaction-related errors
-          const lastUserMessage = messages.filter(m => m.role === "user").slice(-1)[0]
-          if (lastUserMessage) {
-            errorMessage = `Failed to process your request: "${lastUserMessage.content}". ${error.message}`
-          } else {
-            errorMessage = error.message || "An unexpected error occurred. Please try again."
-          }
-        } else {
-          // Use the actual error message if available
-          errorMessage = error.message || "An unexpected error occurred. Please try again."
-        }
-      }
-      
-      const errorMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: errorMessage,
-        timestamp: new Date(),
-        execution: {
-          success: false,
-          status: "failed",
-          privacyLevel: "transparent",
-          message: errorMessage,
-          error: error instanceof Error ? error.message : "Unknown error"
-        }
-      }
-      setMessages((prev) => [...prev, errorMsg])
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleConfirmTransaction = async () => {
-    if (!pendingConfirmation) return
+    // Create a placeholder for the AI response
+    const aiMsgId = (Date.now() + 1).toString();
+    const aiMsg: Message = {
+      id: aiMsgId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, aiMsg]);
 
     try {
-      const result = await api.confirmTransaction(pendingConfirmation.intent)
+      const username = "testuser"; 
       
-      // Update the last message with execution result
-      setMessages((prev) => {
-        const updated = [...prev]
-        const lastMessage = updated[updated.length - 1]
-        if (lastMessage && lastMessage.role === "assistant") {
-          lastMessage.execution = {
-            success: result.success,
-            status: result.status as "pending" | "success" | "failed",
-            txid: result.txid,
-            operationId: result.operationId,
-            privacyLevel: result.privacyLevel as "transparent" | "shielded" | "zero-link",
-            message: result.message,
-            error: result.error
-          }
-        }
-        return updated
-      })
+      const response = await fetch('http://localhost:3001/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          message: userMsg.content, 
+          username,
+          conversationId: currentConvId 
+        }),
+      });
+
+      if (!response.body) throw new Error("No response body");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        fullResponse += chunk;
+        
+        setMessages((prev) => 
+          prev.map(msg => 
+            msg.id === aiMsgId 
+              ? { ...msg, content: msg.content + chunk }
+              : msg
+          )
+        );
+      }
+      
+      // Refresh history to get new title if it was a new chat
+      if (!currentConvId) {
+        fetchHistory();
+      }
+
     } catch (error) {
-      console.error("Failed to confirm transaction:", error)
+      console.error("Chat error:", error);
+      setMessages((prev) => 
+        prev.map(msg => 
+          msg.id === aiMsgId 
+            ? { ...msg, content: msg.content + "\n\n*Error: Failed to get response.*" }
+            : msg
+        )
+      );
     } finally {
-      setPendingConfirmation(null)
+      setIsLoading(false);
     }
-  }
+  };
 
-  const handleCancelTransaction = () => {
-    setPendingConfirmation(null)
-  }
-
-  const handlePromptClick = (prompt: string) => {
-    handleSend(prompt)
-  }
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
     }
-  }
+  };
 
-  const hasMessages = messages.length > 0
+  const toggleListening = () => {
+    if (isListening) {
+      setIsListening(false);
+    } else {
+      setIsListening(true);
+      startListening();
+    }
+  };
+
+  const startListening = () => {
+    if ('webkitSpeechRecognition' in window) {
+      const recognition = new (window as any).webkitSpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput((prev) => prev + (prev ? ' ' : '') + transcript);
+        setIsListening(false);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error', event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } else {
+      alert('Speech recognition not supported in this browser.');
+      setIsListening(false);
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full bg-gradient-to-br from-midnight-graphite via-midnight-graphite to-[#0a1a1f] relative overflow-hidden">
-      {/* Gradient overlay for glow effect */}
-      <div className="absolute inset-0 bg-gradient-to-br from-zec-indigo/5 via-transparent to-electric-emerald/5 pointer-events-none" />
-      
-      {/* Tabs */}
-      <div className="border-b border-obsidian/50 px-6 pt-4 relative z-10">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="chat">Chat</TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {activeTab === "chat" && (
-        <>
-          {/* Messages Area or Empty State */}
-          <ScrollArea className="flex-1 relative z-10" ref={scrollRef}>
-            {!hasMessages ? (
-              <div className="flex flex-col items-center justify-center h-full px-6 py-12 min-h-[600px]">
-                {/* Tagline */}
-                <p className="text-foreground/80 text-sm mb-4">
-                  Private. Intelligent. Yours.
-                </p>
-
-                {/* Genie Logo */}
-                <GenieLogo className="mb-6" />
-
-                {/* Main Title */}
-                <h1 className="text-4xl md:text-5xl font-bold text-center mb-2">
-                  <span className="text-foreground">Talk to AI like your </span>
-                  <span className="text-electric-emerald glow-emerald-text">financial advisor</span>
-                </h1>
-
-                {/* Suggested Prompts */}
-                {showPrompts && (
-                  <div className="mt-12 w-full max-w-2xl">
-                    <SuggestedPrompts onPromptClick={handlePromptClick} />
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="p-6">
-                <div className="max-w-3xl mx-auto space-y-6">
-                  {messages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        "flex gap-4",
-                        message.role === "user" ? "justify-end" : "justify-start"
-                      )}
-                    >
-                      {message.role === "assistant" && (
-                        <div className="w-8 h-8 rounded-full bg-zec-indigo flex items-center justify-center flex-shrink-0">
-                          <Shield className="w-4 h-4 text-white" />
-                        </div>
-                      )}
-                      <div
-                        className={cn(
-                          "rounded-2xl px-4 py-3 max-w-[80%]",
-                          message.role === "user"
-                            ? "bg-zec-indigo text-white"
-                            : message.execution?.status === "failed"
-                            ? "bg-red-500/10 text-red-400 border border-red-500/30"
-                            : "bg-obsidian text-foreground border border-obsidian"
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          {message.isPrivate && message.role === "assistant" && (
-                            <Shield className="w-4 h-4 text-electric-emerald flex-shrink-0 mt-0.5" />
-                          )}
-                          <div className="flex-1">
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                              {message.content}
-                            </p>
-                            {message.role === "assistant" && messages.length > 2 && (
-                              <div className="mt-2 text-xs text-foreground/50 italic">
-                                (Context from {messages.length} previous messages)
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-xs mt-2 opacity-60 flex items-center justify-between">
-                          <span>
-                            {message.timestamp.toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          {message.execution && message.execution.status === "failed" && (
-                            <span className="text-red-400 text-xs ml-2">
-                              Transaction failed
-                            </span>
-                          )}
-                        </div>
-                        
-                        {/* Execution Status */}
-                        {message.execution && (
-                          <div className="mt-3">
-                            <TransactionStatus
-                              status={message.execution.status}
-                              txid={message.execution.txid}
-                              operationId={message.execution.operationId}
-                              privacyLevel={message.execution.privacyLevel}
-                              message={message.execution.message}
-                              error={message.execution.error}
-                            />
-                          </div>
-                        )}
-                      </div>
-                      {message.role === "user" && (
-                        <div className="w-8 h-8 rounded-full bg-foreground/10 flex items-center justify-center flex-shrink-0">
-                          <span className="text-xs font-medium">U</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  {isLoading && (
-                    <div className="flex gap-4 justify-start">
-                      <div className="w-8 h-8 rounded-full bg-zec-indigo flex items-center justify-center flex-shrink-0">
-                        <Shield className="w-4 h-4 text-white" />
-                      </div>
-                      <div className="bg-obsidian rounded-2xl px-4 py-3 border border-obsidian flex items-center gap-2">
-                        <Loader2 className="w-5 h-5 text-zec-indigo animate-spin" />
-                        <span className="text-sm text-foreground/60">Thinking...</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </ScrollArea>
-
-          {/* Input Area */}
-          <div className="border-t border-obsidian/50 bg-obsidian/30 backdrop-blur-sm p-6 relative z-10">
-            <div className="max-w-3xl mx-auto">
-              <div className="flex items-center gap-3">
-                {/* Left Controls */}
-                <button
-                  className="w-10 h-10 rounded-full border border-electric-emerald/30 bg-electric-emerald/10 flex items-center justify-center text-electric-emerald hover:bg-electric-emerald/20 transition-colors"
-                  title="Add attachment"
-                >
-                  <Plus className="w-5 h-5" />
-                </button>
-                <button
-                  className="px-4 py-2 rounded-lg border border-obsidian bg-obsidian/50 text-foreground/70 hover:text-foreground hover:border-electric-emerald/30 transition-colors flex items-center gap-2 text-sm"
-                  title="Web Search"
-                >
-                  <Globe className="w-4 h-4" />
-                  <span>Web Search</span>
-                </button>
-                
-                {/* Input Field */}
-                <Input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Ask me anything. Speak freely."
-                  className="flex-1 bg-obsidian/50 border-electric-emerald/30 focus:border-electric-emerald focus:ring-2 focus:ring-electric-emerald/20 rounded-xl px-4 py-3 text-base"
-                  disabled={isLoading}
-                />
-                
-                {/* Right Controls */}
-                <button
-                  className="p-2 text-foreground/60 hover:text-foreground transition-colors"
-                  title="Voice input"
-                >
-                  <Mic className="w-5 h-5" />
-                </button>
-                <button
-                  className="p-2 text-foreground/60 hover:text-foreground transition-colors"
-                  title="Audio output"
-                >
-                  <Headphones className="w-5 h-5" />
-                </button>
-              </div>
+    <div className="flex h-[calc(100vh-4rem)] bg-zinc-950 text-zinc-100 font-sans overflow-hidden">
+      {/* Sidebar */}
+      <AnimatePresence mode='wait'>
+        {isSidebarOpen && (
+          <motion.div 
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 260, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            className="bg-zinc-900 border-r border-zinc-800 flex flex-col"
+          >
+            <div className="p-4">
+              <Button 
+                onClick={startNewChat}
+                className="w-full justify-start gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border-zinc-700"
+                variant="outline"
+              >
+                <Plus size={16} />
+                New Chat
+              </Button>
             </div>
-          </div>
-        </>
-      )}
+            
+            <div className="flex-1 overflow-y-auto px-2 space-y-1">
+              {conversations.map((conv) => (
+                <button
+                  key={conv.id}
+                  onClick={() => loadConversation(conv.id)}
+                  className={cn(
+                    "w-full text-left px-3 py-3 rounded-lg text-sm transition-colors flex items-center gap-2 truncate",
+                    currentConvId === conv.id 
+                      ? "bg-zinc-800 text-white" 
+                      : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
+                  )}
+                >
+                  <MessageSquare size={14} className="shrink-0" />
+                  <span className="truncate">{conv.title || "New Conversation"}</span>
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Transaction Confirmation Dialog */}
-      {pendingConfirmation && (
-        <TransactionConfirm
-          intent={pendingConfirmation.intent}
-          privacyLevel={pendingConfirmation.privacyLevel}
-          onConfirm={handleConfirmTransaction}
-          onCancel={handleCancelTransaction}
-        />
-      )}
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col min-w-0 bg-zinc-950 relative">
+        {/* Mobile Header / Toggle */}
+        <div className="absolute top-4 left-4 z-10">
+           <Button 
+             variant="ghost" 
+             size="icon" 
+             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+             className="text-zinc-400 hover:text-white hover:bg-zinc-800"
+           >
+             <Menu size={20} />
+           </Button>
+        </div>
 
-      {activeTab === "history" && (
-        <div className="flex-1 flex flex-col p-6 relative z-10">
-          <div className="max-w-3xl mx-auto w-full">
-            <h2 className="text-xl font-semibold mb-4 text-foreground">
-              Conversation History
-            </h2>
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth">
+          <div className="max-w-3xl mx-auto space-y-6 pt-10">
             {messages.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-foreground/60">No conversation history yet</p>
-                <p className="text-sm text-foreground/40 mt-2">
-                  Your past conversations will appear here
-                </p>
+              <div className="text-center text-zinc-500 mt-20">
+                <div className="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <div className="w-8 h-8 bg-green-500 rounded-full animate-pulse" />
+                </div>
+                <h2 className="text-2xl font-semibold text-zinc-200 mb-2">How can I help you?</h2>
+                <p>Ask about your Zcash balance, shield funds, or send transactions.</p>
               </div>
             ) : (
-              <div className="space-y-4">
-                <div className="text-sm text-foreground/60 mb-4">
-                  {messages.length} message{messages.length !== 1 ? "s" : ""} in this conversation
-                </div>
-                <div className="space-y-3">
-                  {messages.map((message, index) => (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        "rounded-lg p-4 border",
-                        message.role === "user"
-                          ? "bg-zec-indigo/10 border-zec-indigo/30"
-                          : "bg-obsidian/50 border-obsidian"
-                      )}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={cn(
-                          "w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0",
-                          message.role === "user"
-                            ? "bg-zec-indigo text-white"
-                            : "bg-zec-indigo/20 text-zec-indigo"
-                        )}>
-                          {message.role === "user" ? "U" : "AI"}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-foreground/90 whitespace-pre-wrap break-words">
-                            {message.content}
-                          </p>
-                          <div className="mt-2 flex items-center gap-2 text-xs text-foreground/50">
-                            <span>
-                              {message.timestamp.toLocaleString([], {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                            {message.execution && (
-                              <span className={cn(
-                                "px-2 py-0.5 rounded",
-                                message.execution.status === "success"
-                                  ? "bg-green-500/20 text-green-400"
-                                  : message.execution.status === "failed"
-                                  ? "bg-red-500/20 text-red-400"
-                                  : "bg-yellow-500/20 text-yellow-400"
-                              )}>
-                                {message.execution.status}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
+              messages.map((msg) => (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={cn(
+                    "flex gap-4 p-4 rounded-xl",
+                    msg.role === 'assistant' ? "bg-zinc-900/50" : "bg-transparent"
+                  )}
+                >
+                  <div className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+                    msg.role === 'assistant' ? "bg-green-600" : "bg-zinc-700"
+                  )}>
+                    {msg.role === 'assistant' ? 'AI' : 'U'}
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <div className="prose prose-invert max-w-none">
+                      <ReactMarkdown
+                        components={{
+                          code({ node, inline, className, children, ...props }: any) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            return !inline && match ? (
+                              <SyntaxHighlighter
+                                style={vscDarkPlus}
+                                language={match[1]}
+                                PreTag="div"
+                                {...props}
+                              >
+                                {String(children).replace(/\n$/, '')}
+                              </SyntaxHighlighter>
+                            ) : (
+                              <code className={cn("bg-zinc-800 px-1 py-0.5 rounded text-sm", className)} {...props}>
+                                {children}
+                              </code>
+                            );
+                          }
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                </motion.div>
+              ))
             )}
+            <div ref={messagesEndRef} />
           </div>
         </div>
-      )}
-    </div>
-  )
-}
 
+        {/* Input Area */}
+        <div className="p-4 bg-zinc-950 border-t border-zinc-900">
+          <div className="max-w-3xl mx-auto relative">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message ZecFinder..."
+              className="w-full bg-zinc-900 text-zinc-100 rounded-xl pl-4 pr-24 py-3 focus:outline-none focus:ring-1 focus:ring-green-500/50 resize-none min-h-[52px] max-h-[200px]"
+              rows={1}
+            />
+            <div className="absolute right-2 bottom-2 flex gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={toggleListening}
+                className={cn(
+                  "hover:bg-zinc-800 transition-colors",
+                  isListening ? "text-red-500 animate-pulse" : "text-zinc-400"
+                )}
+              >
+                {isListening ? <StopCircle size={20} /> : <Mic size={20} />}
+              </Button>
+              <Button
+                size="icon"
+                onClick={handleSend}
+                disabled={!input.trim() || isLoading}
+                className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send size={18} />
+              </Button>
+            </div>
+          </div>
+          <div className="text-center text-xs text-zinc-600 mt-2">
+            AI can make mistakes. Check important info.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

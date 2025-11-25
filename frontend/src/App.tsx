@@ -3,7 +3,7 @@ import { ThemeProvider } from 'next-themes';
 import { Header } from './components/layout/Header';
 import { Footer } from './components/layout/Footer';
 import { Landing } from './pages/Landing';
-import { App as AppPage } from './pages/App';
+import { AppLayout as AppPage } from './pages/App';
 
 function App() {
   return (

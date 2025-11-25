@@ -4,9 +4,9 @@ import {
   shieldTransaction,
   unshieldTransaction,
   getBalance,
-  getWalletAddress,
   checkShieldedOperationStatus
 } from "./zcashService.js"
+import { getUser } from "../db/database.js"
 import { selectUTXOsForZeroLink, isShieldedAddress, isTransparentAddress } from "./zeroLinkRouting.js"
 import { getUTXOS } from "@mayaprotocol/zcash-js"
 import { getZcashConfig } from "./zcashService.js"
@@ -25,11 +25,11 @@ export interface ExecutionResult {
 /**
  * Execute a parsed intent and return the result
  */
-export async function executeIntent(intent: ParsedIntent): Promise<ExecutionResult> {
+export async function executeIntent(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   try {
     // Validate wallet is initialized
-    const walletAddress = getWalletAddress()
-    if (!walletAddress) {
+    const user = await getUser(userId);
+    if (!user) {
       return {
         success: false,
         status: "failed",
@@ -38,21 +38,22 @@ export async function executeIntent(intent: ParsedIntent): Promise<ExecutionResu
         error: "Wallet not initialized"
       }
     }
+    const walletAddress = user.wallet_address;
 
     // Route to appropriate handler based on action
     switch (intent.action) {
       case "send":
-        return await handleSend(intent)
+        return await handleSend(intent, userId)
       case "shield":
-        return await handleShield(intent)
+        return await handleShield(intent, userId)
       case "unshield":
-        return await handleUnshield(intent)
+        return await handleUnshield(intent, userId)
       case "balance":
-        return await handleBalance(intent)
+        return await handleBalance(intent, userId)
       case "query":
-        return await handleQuery(intent)
+        return await handleQuery(intent, userId)
       case "swap":
-        return await handleSwap(intent)
+        return await handleSwap(intent, userId)
       default:
         return {
           success: false,
@@ -76,7 +77,7 @@ export async function executeIntent(intent: ParsedIntent): Promise<ExecutionResu
 /**
  * Handle send transaction intent
  */
-async function handleSend(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleSend(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   if (!intent.amount || intent.amount <= 0) {
     return {
       success: false,
@@ -98,10 +99,9 @@ async function handleSend(intent: ParsedIntent): Promise<ExecutionResult> {
   }
 
   try {
-    const walletAddress = getWalletAddress()
-    if (!walletAddress) {
-      throw new Error("Wallet not initialized")
-    }
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+    const walletAddress = user.wallet_address;
 
     const config = getZcashConfig()
     if (!config) {
@@ -112,31 +112,13 @@ async function handleSend(intent: ParsedIntent): Promise<ExecutionResult> {
     const toAddress = intent.recipient
     const isToShielded = isShieldedAddress(toAddress)
     const isFromShielded = isShieldedAddress(walletAddress)
-    const useZeroLink = intent.isPrivate && !isToShielded && !isFromShielded
-
+    
     let txid: string
     let privacyLevel: "transparent" | "shielded" | "zero-link"
 
-    if (isToShielded || isFromShielded) {
-      // Shielded transaction - use z_sendmany (handled in sendTransaction)
-      // For now, we'll use the regular sendTransaction which will need to be enhanced
-      // to handle z-addresses properly
-      txid = await sendTransaction(toAddress, intent.amount, true)
-      privacyLevel = "shielded"
-    } else if (useZeroLink) {
-      // Zero-link routing for transparent transactions
-      const utxos = await getUTXOS(walletAddress, config)
-      const selectedUTXOs = selectUTXOsForZeroLink(intent.amount, utxos)
-      
-      // Use selected UTXOs for transaction (this would require modifying sendTransaction)
-      // For now, we'll use the regular sendTransaction with isPrivate flag
-      txid = await sendTransaction(toAddress, intent.amount, true)
-      privacyLevel = "zero-link"
-    } else {
-      // Regular transparent transaction
-      txid = await sendTransaction(toAddress, intent.amount, false)
-      privacyLevel = "transparent"
-    }
+    // For MVP, we simplify routing logic to just use z_sendmany via sendTransaction
+    txid = await sendTransaction(walletAddress, toAddress, intent.amount)
+    privacyLevel = isToShielded ? "shielded" : "transparent"
 
     return {
       success: true,
@@ -159,7 +141,7 @@ async function handleSend(intent: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle shield transaction intent
  */
-async function handleShield(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleShield(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   if (!intent.amount || intent.amount <= 0) {
     return {
       success: false,
@@ -171,7 +153,10 @@ async function handleShield(intent: ParsedIntent): Promise<ExecutionResult> {
   }
 
   try {
-    const operationId = await shieldTransaction(intent.amount)
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    const operationId = await shieldTransaction(user.wallet_address, user.shielded_address, intent.amount)
     
     return {
       success: true,
@@ -194,7 +179,7 @@ async function handleShield(intent: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle unshield transaction intent
  */
-async function handleUnshield(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleUnshield(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   if (!intent.amount || intent.amount <= 0) {
     return {
       success: false,
@@ -206,8 +191,11 @@ async function handleUnshield(intent: ParsedIntent): Promise<ExecutionResult> {
   }
 
   try {
-    const toAddress = intent.recipient || getWalletAddress() || undefined
-    const operationId = await unshieldTransaction(intent.amount, toAddress)
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    const toAddress = intent.recipient || user.wallet_address;
+    const operationId = await unshieldTransaction(user.shielded_address, toAddress, intent.amount)
     
     return {
       success: true,
@@ -230,9 +218,12 @@ async function handleUnshield(intent: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle balance query intent
  */
-async function handleBalance(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleBalance(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   try {
-    const walletInfo = await getBalance()
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    const walletInfo = await getBalance(user.wallet_address, user.shielded_address)
     
     return {
       success: true,
@@ -254,10 +245,13 @@ async function handleBalance(intent: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle general query intent
  */
-async function handleQuery(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleQuery(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   try {
-    const walletAddress = getWalletAddress()
-    const walletInfo = await getBalance()
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+
+    const walletAddress = user.wallet_address;
+    const walletInfo = await getBalance(user.wallet_address, user.shielded_address)
     
     return {
       success: true,
@@ -279,7 +273,7 @@ async function handleQuery(intent: ParsedIntent): Promise<ExecutionResult> {
 /**
  * Handle swap transaction intent (cross-chain via NEAR Intents)
  */
-async function handleSwap(intent: ParsedIntent): Promise<ExecutionResult> {
+async function handleSwap(intent: ParsedIntent, userId: string): Promise<ExecutionResult> {
   if (!intent.amount || intent.amount <= 0) {
     return {
       success: false,
@@ -301,7 +295,9 @@ async function handleSwap(intent: ParsedIntent): Promise<ExecutionResult> {
   }
 
   try {
-    const walletAddress = getWalletAddress()
+    const user = await getUser(userId);
+    if (!user) throw new Error("User not found");
+    const walletAddress = user.wallet_address;
     const recipient = intent.recipient || walletAddress || undefined
 
     // Create swap intent via NEAR Intents
@@ -323,7 +319,7 @@ async function handleSwap(intent: ParsedIntent): Promise<ExecutionResult> {
           try {
             // Wait a bit for the swap to settle, then shield
             await new Promise(resolve => setTimeout(resolve, 10000)) // 10 second delay
-            shieldOperationId = await shieldTransaction(intent.amount)
+            shieldOperationId = await shieldTransaction(user.wallet_address, user.shielded_address, intent.amount)
           } catch (shieldError) {
             // Shield failed, but swap succeeded
             console.error("Failed to auto-shield after swap:", shieldError)

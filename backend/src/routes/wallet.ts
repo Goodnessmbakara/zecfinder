@@ -1,5 +1,6 @@
 import express, { Router } from "express"
-import { createWallet, importWallet, getBalance, initializeZcash, getWalletAddress } from "../services/zcashService.js"
+import { createWallet, getBalance, initializeZcash, shieldTransaction } from "../services/zcashService.js"
+import { getUser, createUser } from "../db/database.js"
 
 const router: Router = express.Router()
 
@@ -11,80 +12,75 @@ initializeZcash({
   network: (process.env.ZCASH_NETWORK as "mainnet" | "testnet") || "testnet"
 })
 
-router.post("/create", async (req, res) => {
+// Login or Register
+router.post("/login", async (req, res) => {
   try {
-    const wallet = await createWallet()
-    res.json({
-      address: wallet.address,
-      mnemonic: wallet.mnemonic,
-      // Never send private key to frontend in production
-      // This is for MVP testing only
-      privateKey: wallet.privateKey
-    })
-  } catch (error) {
-    console.error("Create wallet error:", error)
-    res.status(500).json({
-      error: "Failed to create wallet",
-      message: error instanceof Error ? error.message : "Unknown error"
-    })
-  }
-})
+    const { username } = req.body
+    if (!username) return res.status(400).json({ error: "Username required" })
 
-router.post("/import", async (req, res) => {
-  try {
-    const { mnemonic } = req.body
-
-    if (!mnemonic || typeof mnemonic !== "string") {
-      return res.status(400).json({ error: "Mnemonic is required" })
+    let user = await getUser(username)
+    if (!user) {
+      console.log(`Creating new wallet for user: ${username}`)
+      // Create new wallet
+      const wallet = await createWallet()
+      user = await createUser(username, wallet.address, wallet.privateKey, wallet.shieldedAddress)
+    } else {
+        console.log(`User logged in: ${username}`)
     }
 
-    const wallet = await importWallet(mnemonic)
     res.json({
-      address: wallet.address,
-      // Never send private key to frontend in production
-      privateKey: wallet.privateKey
+      username: user.username,
+      address: user.wallet_address,
+      shieldedAddress: user.shielded_address
     })
   } catch (error) {
-    console.error("Import wallet error:", error)
-    res.status(500).json({
-      error: "Failed to import wallet",
-      message: error instanceof Error ? error.message : "Unknown error"
-    })
+    console.error("Login error:", error)
+    res.status(500).json({ error: "Login failed", details: error instanceof Error ? error.message : String(error) })
   }
 })
 
+// Get Balance
 router.get("/balance", async (req, res) => {
   try {
-    const walletAddress = getWalletAddress()
-    if (!walletAddress) {
-      return res.status(404).json({ error: "Wallet not initialized" })
-    }
+    const { username } = req.query
+    if (!username || typeof username !== 'string') return res.status(400).json({ error: "Username required" })
 
-    const walletInfo = await getBalance()
-    res.json(walletInfo)
+    const user = await getUser(username)
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    const balance = await getBalance(user.wallet_address, user.shielded_address)
+    res.json(balance)
   } catch (error) {
-    console.error("Get balance error:", error)
-    res.status(500).json({
-      error: "Failed to get balance",
-      message: error instanceof Error ? error.message : "Unknown error"
-    })
+    console.error("Balance error:", error)
+    res.status(500).json({ error: "Failed to get balance" })
   }
 })
 
-router.get("/address", async (req, res) => {
+// Shield Funds
+router.post("/shield", async (req, res) => {
   try {
-    const address = getWalletAddress()
-    if (!address) {
-      return res.status(404).json({ error: "Wallet not initialized" })
-    }
-    res.json({ address })
+    const { username, amount } = req.body
+    if (!username || !amount) return res.status(400).json({ error: "Username and amount required" })
+
+    const user = await getUser(username)
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    if (!user.shielded_address) return res.status(400).json({ error: "User has no shielded address" })
+
+    const opId = await shieldTransaction(user.wallet_address, user.shielded_address, parseFloat(amount))
+    res.json({ operationId: opId })
   } catch (error) {
-    console.error("Get address error:", error)
-    res.status(500).json({
-      error: "Failed to get address",
-      message: error instanceof Error ? error.message : "Unknown error"
-    })
+    console.error("Shield error:", error)
+    res.status(500).json({ error: "Shielding failed" })
   }
+})
+
+// Airdrop Info
+router.post("/airdrop", async (req, res) => {
+    res.json({
+        message: "To get testnet ZEC, please visit a Zcash Testnet Faucet.",
+        faucetUrl: "https://faucet.zecpages.com/" 
+    })
 })
 
 export default router
