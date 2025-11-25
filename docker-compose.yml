@@ -12,9 +12,11 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
+        mkdir -p /srv/zcashd/.zcash/exports && \
         zcashd -testnet -server=1 -rpcuser=zcash -rpcpassword=zcash123 \
         -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -rpcport=18232 \
-        -printtoconsole -i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
+        -printtoconsole -i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1 \
+        -allowdeprecated=getnewaddress -exportdir=/srv/zcashd/.zcash/exports
     healthcheck:
       test: ["CMD-SHELL", "zcash-cli -testnet -rpcuser=zcash -rpcpassword=zcash123 getblockchaininfo || exit 1"]
       interval: 30s
@@ -49,9 +51,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
+    # volumes:
+    #   - ./backend:/app
+    #   - /app/node_modules
 
   frontend:
     build:
