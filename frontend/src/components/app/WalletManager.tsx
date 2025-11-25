@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Shield, RefreshCw, Copy, Check, Wallet, AlertCircle } from 'lucide-react';
 import { WalletBackupAcknowledgment } from './WalletBackupAcknowledgment';
+import { useWalletStore } from '@/lib/walletStore';
 
 interface WalletInfo {
   address: string;
@@ -25,7 +26,7 @@ interface InitializationStatus {
 }
 
 export function WalletManager() {
-  const [username, setUsername] = useState('');
+  const [usernameInput, setUsernameInput] = useState('');
   const [user, setUser] = useState<UserInfo | null>(null);
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,8 +36,19 @@ export function WalletManager() {
   const [checkingInit, setCheckingInit] = useState(true);
   const [backupRequired, setBackupRequired] = useState(false);
   const [showInteractiveBackup, setShowInteractiveBackup] = useState(false);
+  
+  // Use shared wallet store for username
+  const { username, setUsername, setAddress, setShieldedAddress } = useWalletStore();
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  
+  // Load username from store on mount
+  useEffect(() => {
+    if (username && !user) {
+      // User was logged in before, restore their session
+      handleLoginFromStore(username);
+    }
+  }, [username]);
 
   // Check initialization status on mount
   useEffect(() => {
@@ -59,20 +71,47 @@ export function WalletManager() {
     }
   };
 
+  const handleLoginFromStore = async (storedUsername: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/wallet/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: storedUsername }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUser(data);
+        setAddress(data.address);
+        setShieldedAddress(data.shieldedAddress || null);
+        fetchBalance(data.username);
+        setBackupRequired(false);
+      }
+    } catch (error) {
+      console.error('Auto-login error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username) return;
+    if (!usernameInput) return;
 
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/wallet/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username }),
+        body: JSON.stringify({ username: usernameInput }),
       });
       const data = await res.json();
       if (res.ok) {
         setUser(data);
+        // Store username in shared store
+        setUsername(data.username);
+        setAddress(data.address);
+        setShieldedAddress(data.shieldedAddress || null);
         fetchBalance(data.username);
         setBackupRequired(false);
       } else {
@@ -265,8 +304,8 @@ export function WalletManager() {
                 <Input
                   id="username"
                   placeholder="Enter a username to create/access wallet"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
                   className="bg-obsidian border-neutral-700 text-white"
                   disabled={loading}
                 />

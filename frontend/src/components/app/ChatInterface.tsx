@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Send, StopCircle, Menu, Plus, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { useWalletStore } from '@/lib/walletStore';
 
 interface Message {
   id: string;
@@ -29,17 +30,25 @@ export const ChatInterface = () => {
   const [currentConvId, setCurrentConvId] = useState<number | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
+  // Get username from shared wallet store
+  const { username } = useWalletStore();
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Fetch history on mount
+  // Fetch history on mount and when username changes
   useEffect(() => {
-    fetchHistory();
-  }, []);
+    if (username) {
+      fetchHistory();
+    }
+  }, [username]);
 
   const fetchHistory = async () => {
+    if (!username) {
+      console.warn("Cannot fetch history: no username");
+      return;
+    }
     try {
-      const username = "testuser"; // TODO: Context
       const res = await fetch(`http://localhost:3001/api/chat/history?username=${username}`);
       if (res.ok) {
         const data = await res.json();
@@ -109,9 +118,19 @@ export const ChatInterface = () => {
     };
     setMessages((prev) => [...prev, aiMsg]);
 
+    if (!username) {
+      setMessages((prev) => 
+        prev.map(msg => 
+          msg.id === aiMsgId 
+            ? { ...msg, content: "Please connect your wallet first by logging in above." }
+            : msg
+        )
+      );
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const username = "testuser"; 
-      
       const response = await fetch('http://localhost:3001/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -268,7 +287,15 @@ export const ChatInterface = () => {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth">
           <div className="max-w-3xl mx-auto space-y-6 pt-10">
-            {messages.length === 0 ? (
+            {!username ? (
+              <div className="text-center text-zinc-500 mt-20">
+                <div className="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <div className="w-8 h-8 bg-yellow-500 rounded-full" />
+                </div>
+                <h2 className="text-2xl font-semibold text-zinc-200 mb-2">Please Connect Your Wallet</h2>
+                <p>Log in with your username above to start chatting with the ZecFinder agent.</p>
+              </div>
+            ) : messages.length === 0 ? (
               <div className="text-center text-zinc-500 mt-20">
                 <div className="w-16 h-16 bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-4">
                   <div className="w-8 h-8 bg-green-500 rounded-full animate-pulse" />
