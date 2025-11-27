@@ -60,3 +60,4 @@ fi
 echo "Wallet backup acknowledged successfully"
 exit 0
 
+

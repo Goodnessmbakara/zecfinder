@@ -11,7 +11,8 @@ interface WalletInfo {
   address: string;
   balance: number;
   shieldedBalance: number;
-  shieldedAddress: string;
+  shieldedAddress?: string;
+  network?: 'testnet' | 'mainnet';
 }
 
 interface UserInfo {
@@ -142,6 +143,14 @@ export function WalletManager() {
       const data = await res.json();
       if (res.ok) {
         setWalletInfo(data);
+        // Update shielded address if it's in the response and not already set
+        if (data.shieldedAddress && !user?.shieldedAddress) {
+          setShieldedAddress(data.shieldedAddress);
+          // Update user state with shielded address
+          if (user) {
+            setUser({ ...user, shieldedAddress: data.shieldedAddress });
+          }
+        }
       }
     } catch (error) {
       console.error('Fetch balance error:', error);
@@ -344,14 +353,14 @@ export function WalletManager() {
           <div className="grid grid-cols-2 gap-4">
             <div className="p-4 rounded-lg bg-obsidian border border-neutral-700">
               <div className="text-sm text-gray-400 mb-1">Transparent Balance</div>
-              <div className="text-2xl font-bold text-white">{walletInfo?.balance || 0} ZEC</div>
+              <div className="text-2xl font-bold text-white">{walletInfo?.balance || 0} {walletInfo?.network === 'testnet' ? 'TAZ' : 'ZEC'}</div>
             </div>
             <div className="p-4 rounded-lg bg-obsidian border border-neutral-700 relative overflow-hidden">
               <div className="absolute top-0 right-0 p-2 opacity-10">
                 <Shield className="h-16 w-16 text-electric-emerald" />
               </div>
               <div className="text-sm text-electric-emerald mb-1">Shielded Balance</div>
-              <div className="text-2xl font-bold text-white">{walletInfo?.shieldedBalance || 0} ZEC</div>
+              <div className="text-2xl font-bold text-white">{walletInfo?.shieldedBalance || 0} {walletInfo?.network === 'testnet' ? 'TAZ' : 'ZEC'}</div>
             </div>
           </div>
 
@@ -378,16 +387,18 @@ export function WalletManager() {
               <Label className="text-gray-400 text-xs uppercase tracking-wider">Shielded Address</Label>
               <div className="flex items-center gap-2 mt-1">
                 <code className="flex-1 p-2 bg-obsidian rounded text-xs text-gray-300 break-all border border-neutral-700">
-                  {user.shieldedAddress}
+                  {user.shieldedAddress || walletInfo?.shieldedAddress || 'Not available'}
                 </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="shrink-0 text-gray-400 hover:text-white"
-                  onClick={() => copyToClipboard(user.shieldedAddress, 'z-addr')}
-                >
-                  {copied === 'z-addr' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                </Button>
+                {(user.shieldedAddress || walletInfo?.shieldedAddress) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-gray-400 hover:text-white"
+                    onClick={() => copyToClipboard(user.shieldedAddress || walletInfo?.shieldedAddress || '', 'z-addr')}
+                  >
+                    {copied === 'z-addr' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                )}
               </div>
             </div>
           </div>

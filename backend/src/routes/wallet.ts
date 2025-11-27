@@ -94,7 +94,11 @@ router.get("/balance", async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" })
 
     const balance = await getBalance(user.wallet_address, user.shielded_address)
-    res.json(balance)
+    // Include network info for currency display
+    res.json({
+      ...balance,
+      network: network // testnet or mainnet
+    })
   } catch (error) {
     console.error("Balance error:", error)
     res.status(500).json({ error: "Failed to get balance" })
@@ -124,7 +128,7 @@ router.post("/shield", async (req, res) => {
 router.post("/airdrop", async (req, res) => {
     res.json({
         message: "To get testnet ZEC, please visit a Zcash Testnet Faucet.",
-        faucetUrl: "https://faucet.zecpages.com/" 
+        faucetUrl: "https://testnet.zecfaucet.com/" 
     })
 })
 

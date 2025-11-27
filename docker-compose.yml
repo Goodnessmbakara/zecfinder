@@ -42,6 +42,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - PORT=3001
       - FRONTEND_URL=${FRONTEND_URL:-http://frontend:5173}
+      - DATA_DIR=/app/data
+    volumes:
+      - backend-data:/app/data
     depends_on:
       zcash-testnet:
         condition: service_started
@@ -73,6 +76,8 @@ volumes:
   zcash-data:
     driver: local
   zcash-params:
+    driver: local
+  backend-data:
     driver: local
 
 

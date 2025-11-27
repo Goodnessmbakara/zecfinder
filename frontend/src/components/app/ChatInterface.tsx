@@ -321,24 +321,87 @@ export const ChatInterface = () => {
                     {msg.role === 'assistant' ? 'AI' : 'U'}
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    <div className="prose prose-invert max-w-none">
+                    <div className="prose prose-invert max-w-none prose-headings:text-white prose-p:text-zinc-200 prose-strong:text-white prose-code:text-green-400 prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
                       <ReactMarkdown
                         components={{
+                          // Code blocks with syntax highlighting
                           code({ node, inline, className, children, ...props }: any) {
                             const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <SyntaxHighlighter
-                                style={vscDarkPlus}
-                                language={match[1]}
-                                PreTag="div"
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
-                            ) : (
-                              <code className={cn("bg-zinc-800 px-1 py-0.5 rounded text-sm", className)} {...props}>
+                            if (!inline && match) {
+                              return (
+                                <SyntaxHighlighter
+                                  style={vscDarkPlus}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  customStyle={{
+                                    margin: '0.5rem 0',
+                                    borderRadius: '0.5rem',
+                                    padding: '1rem'
+                                  }}
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              );
+                            }
+                            // Inline code
+                            return (
+                              <code className={cn("bg-zinc-800 text-green-400 px-1.5 py-0.5 rounded text-sm font-mono", className)} {...props}>
                                 {children}
                               </code>
+                            );
+                          },
+                          // Paragraphs
+                          p({ children }: any) {
+                            return <p className="mb-2 text-zinc-200 leading-relaxed">{children}</p>;
+                          },
+                          // Headings
+                          h1({ children }: any) {
+                            return <h1 className="text-xl font-bold text-white mb-2 mt-4">{children}</h1>;
+                          },
+                          h2({ children }: any) {
+                            return <h2 className="text-lg font-semibold text-white mb-2 mt-3">{children}</h2>;
+                          },
+                          h3({ children }: any) {
+                            return <h3 className="text-base font-semibold text-white mb-1 mt-2">{children}</h3>;
+                          },
+                          // Lists
+                          ul({ children }: any) {
+                            return <ul className="list-disc list-inside mb-2 text-zinc-200 space-y-1">{children}</ul>;
+                          },
+                          ol({ children }: any) {
+                            return <ol className="list-decimal list-inside mb-2 text-zinc-200 space-y-1">{children}</ol>;
+                          },
+                          li({ children }: any) {
+                            return <li className="text-zinc-200">{children}</li>;
+                          },
+                          // Strong/Bold
+                          strong({ children }: any) {
+                            return <strong className="font-semibold text-white">{children}</strong>;
+                          },
+                          // Emphasis/Italic
+                          em({ children }: any) {
+                            return <em className="italic text-zinc-300">{children}</em>;
+                          },
+                          // Links
+                          a({ href, children }: any) {
+                            return (
+                              <a 
+                                href={href} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-green-400 hover:text-green-300 underline"
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                          // Blockquotes
+                          blockquote({ children }: any) {
+                            return (
+                              <blockquote className="border-l-4 border-green-500 pl-4 my-2 italic text-zinc-300">
+                                {children}
+                              </blockquote>
                             );
                           }
                         }}

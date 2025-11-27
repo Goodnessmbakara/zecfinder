@@ -21,8 +21,8 @@ export async function generateTitle(message: string): Promise<string> {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey || apiKey.trim() === "") {
-      return "New Conversation";
-    }
+    return "New Conversation";
+  }
     
     const model = getGenAI().getGenerativeModel({ model: "gemini-flash-latest" });
     const prompt = `Generate a short, concise title (3-5 words) for a chat conversation that starts with this message: "${message.substring(0, 100)}"
@@ -44,29 +44,29 @@ export async function* processRequestStream(username: string, message: string, c
   let fullResponse = "";
 
   try {
-    // 1. Get User & Conversation
-    const user = await getUser(username);
-    if (!user) {
+  // 1. Get User & Conversation
+  const user = await getUser(username);
+  if (!user) {
       yield "❌ Error: User not found. Please make sure you're logged in.\n";
-      return;
-    }
+    return;
+  }
 
-    if (!currentConvId) {
-      // Create new conversation
+  if (!currentConvId) {
+    // Create new conversation
       try {
-        const title = await generateTitle(message);
-        const conv = await createConversation(user.id, title);
-        currentConvId = conv.id;
+    const title = await generateTitle(message);
+    const conv = await createConversation(user.id, title);
+    currentConvId = conv.id;
       } catch (error) {
         console.error("Error creating conversation:", error);
         // Continue anyway, we can still process the message
       }
-    }
+  }
 
-    // Save User Message
-    if (currentConvId) {
+  // Save User Message
+  if (currentConvId) {
       try {
-        await addMessage(currentConvId, 'user', message);
+    await addMessage(currentConvId, 'user', message);
       } catch (error) {
         console.error("Error saving user message:", error);
         // Continue anyway
@@ -134,7 +134,7 @@ export async function* processRequestStream(username: string, message: string, c
 
         executionResult = await executeIntent(parsedIntent, username);
         console.log("[processRequestStream] Execution result:", executionResult);
-      } catch (error) {
+  } catch (error) {
         console.error("[processRequestStream] Execution error:", error);
         executionResult = {
           success: false,
@@ -147,7 +147,18 @@ export async function* processRequestStream(username: string, message: string, c
     }
 
     // 5. Build context for AI response
-    const context: { balance?: number; address?: string; error?: string; executionResult?: any } = {};
+    const network = process.env.ZCASH_NETWORK || "testnet";
+    const context: { 
+      balance?: number; 
+      address?: string; 
+      error?: string; 
+      executionResult?: any;
+      network?: string;
+      currency?: string;
+    } = {
+      network: network,
+      currency: network === "testnet" ? "TAZ" : "ZEC"
+    };
     
     if (executionResult) {
       if (executionResult.success) {
@@ -161,6 +172,11 @@ export async function* processRequestStream(username: string, message: string, c
       } else {
         context.error = executionResult.error || executionResult.message;
       }
+    }
+    
+    // Add wallet info to context if available
+    if (user) {
+      context.address = user.wallet_address;
     }
 
     // 6. Generate Natural Language Response using robust implementation
@@ -205,7 +221,7 @@ export async function* processRequestStream(username: string, message: string, c
     // 7. Save Assistant Message
     if (currentConvId && fullResponse) {
       try {
-        await addMessage(currentConvId, 'assistant', fullResponse);
+    await addMessage(currentConvId, 'assistant', fullResponse);
       } catch (error) {
         console.error("Error saving assistant message:", error);
         // Non-critical, continue

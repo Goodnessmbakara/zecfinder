@@ -4,6 +4,12 @@ import { useWalletStore } from "@/lib/walletStore"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 
+// Helper to get currency symbol based on network
+const getCurrencySymbol = (network?: 'testnet' | 'mainnet') => {
+  // Default to testnet if not specified (since we're using testnet)
+  return network === 'mainnet' ? 'ZEC' : 'TAZ'
+}
+
 export function AppHeader() {
   const [showWalletDropdown, setShowWalletDropdown] = useState(false)
   const { address, balance, isConnected, setAddress, setBalance, setConnected } = useWalletStore()
@@ -42,6 +48,8 @@ export function AppHeader() {
     restoreWallet()
   }, []) // Only run on mount
 
+  const [network, setNetwork] = useState<'testnet' | 'mainnet'>('testnet')
+
   // Fetch wallet data if connected
   useEffect(() => {
     if (isConnected && address) {
@@ -49,6 +57,10 @@ export function AppHeader() {
         try {
           const walletInfo = await api.getBalance()
           setBalance(walletInfo.balance, walletInfo.shieldedBalance)
+          // Update network if provided
+          if ((walletInfo as any).network) {
+            setNetwork((walletInfo as any).network)
+          }
         } catch (error) {
           console.error("Failed to fetch balance:", error)
         }
@@ -106,7 +118,7 @@ export function AppHeader() {
                 </span>
                 {balance > 0 && (
                   <span className="text-xs text-foreground/60">
-                    {balance.toFixed(4)} ZEC
+                    {balance.toFixed(4)} {getCurrencySymbol(network)}
                   </span>
                 )}
                 <ChevronDown className="w-4 h-4 text-foreground/60" />
@@ -118,7 +130,7 @@ export function AppHeader() {
                     <p className="text-sm text-foreground font-mono break-all">{address}</p>
                     {balance > 0 && (
                       <p className="text-sm text-electric-emerald mt-2">
-                        Balance: {balance.toFixed(4)} ZEC
+                        Balance: {balance.toFixed(4)} {getCurrencySymbol(network)}
                       </p>
                     )}
                   </div>

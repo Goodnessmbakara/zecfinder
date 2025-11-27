@@ -36,6 +36,8 @@ export interface WalletInfo {
   address: string
   balance: number
   shieldedBalance?: number
+  shieldedAddress?: string
+  network?: 'testnet' | 'mainnet'
 }
 
 export const api = {

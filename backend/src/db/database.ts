@@ -7,11 +7,23 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = path.resolve(__dirname, '../../users.db');
+// Use /app/data directory for persistence in Docker, fallback to project root for local dev
+const dataDir = process.env.DATA_DIR || path.resolve(__dirname, '../../data');
+const dbPath = path.resolve(dataDir, 'users.db');
 let db: Database;
 
 export const initializeDatabase = async () => {
   try {
+    // Ensure data directory exists
+    const fs = await import('fs/promises');
+    try {
+      await fs.mkdir(dataDir, { recursive: true });
+    } catch (err) {
+      // Directory might already exist, that's fine
+      console.log(`Data directory: ${dataDir}`);
+    }
+    
+    console.log(`Database path: ${dbPath}`);
     db = await open({
       filename: dbPath,
       driver: sqlite3.Database
