@@ -22,9 +22,14 @@ console.log(`Zcash initialized: network=${network}, RPC=${process.env.ZCASH_RPC_
 router.get("/initialization-status", async (req, res) => {
   try {
     const status = await checkWalletInitialization()
-    res.json(status)
+    // Ensure we always return valid JSON with required fields
+    res.status(200).json({
+      initialized: status.initialized || false,
+      error: status.error || undefined
+    })
   } catch (error) {
     console.error("Initialization status check error:", error)
+    // Always return valid JSON, even on error
     res.status(500).json({ 
       initialized: false, 
       error: error instanceof Error ? error.message : String(error) 

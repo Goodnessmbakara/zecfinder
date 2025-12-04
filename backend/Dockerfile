@@ -11,17 +11,21 @@ RUN npm install -g pnpm && \
 # Copy package files
 COPY package.json pnpm-lock.yaml* ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (pnpm ignores build scripts by default for security)
+RUN pnpm install --frozen-lockfile
+
+# Manually build sqlite3 native bindings using npm
+RUN npm install -g node-gyp && \
+    find node_modules/.pnpm -name "sqlite3" -type d -path "*/sqlite3@*/node_modules/sqlite3" | head -1 | xargs -I {} sh -c 'cd {} && npm run install'
 
 # Copy source code
 COPY . .
 
 # Build TypeScript
-RUN rm -rf dist && npm run build
+RUN rm -rf dist && pnpm run build
 
 # Expose port
 EXPOSE 3001
 
 # Start server
-CMD ["npm", "start"]
+CMD ["pnpm", "start"]

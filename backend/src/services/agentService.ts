@@ -1,5 +1,6 @@
 import { parseIntent, generateResponse, ParsedIntent, AIAgentError } from "./aiAgent.js";
 import { executeIntent } from "./executionEngine.js";
+import { evaluateTransaction } from "./transactionEvaluation.js";
 import { getUser, createConversation, addMessage, getMessages } from "../db/database.js";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
@@ -115,32 +116,48 @@ export async function* processRequestStream(username: string, message: string, c
       yield "⚠️ Could not parse intent, treating as general query...\n";
     }
 
-    // 4. Execute Action (if not just a query/chat)
+    // 4. Evaluate or Execute Action (if not just a query/chat)
     let executionResult = null;
+    let transactionEvaluation = null;
+    
     if (parsedIntent.action !== "query" && parsedIntent.action !== "unknown" && parsedIntent.action !== "receive") {
       try {
         // Map parsed intent action to execution context
         if (parsedIntent.action === "balance") {
           yield "📊 Checking your wallet balance...\n";
+          // Balance queries can be executed directly
+          executionResult = await executeIntent(parsedIntent, username);
         } else if (parsedIntent.action === "shield") {
-          yield "🔒 Initiating shielding operation...\n";
+          yield "🔒 Evaluating shielding operation...\n";
+          // Evaluate transaction for browser execution
+          transactionEvaluation = await evaluateTransaction(parsedIntent, username);
         } else if (parsedIntent.action === "unshield") {
-          yield "🔓 Initiating unshielding operation...\n";
+          yield "🔓 Evaluating unshielding operation...\n";
+          // Evaluate transaction for browser execution
+          transactionEvaluation = await evaluateTransaction(parsedIntent, username);
         } else if (parsedIntent.action === "send") {
-          yield `💸 Processing send transaction...\n`;
+          yield `💸 Evaluating send transaction...\n`;
+          // Evaluate transaction for browser execution
+          transactionEvaluation = await evaluateTransaction(parsedIntent, username);
         } else if (parsedIntent.action === "swap") {
           yield `🔄 Processing swap transaction...\n`;
+          // Swap uses NEAR Intents, execute directly
+          executionResult = await executeIntent(parsedIntent, username);
         }
-
-        executionResult = await executeIntent(parsedIntent, username);
-        console.log("[processRequestStream] Execution result:", executionResult);
-  } catch (error) {
-        console.error("[processRequestStream] Execution error:", error);
+        
+        if (executionResult) {
+          console.log("[processRequestStream] Execution result:", executionResult);
+        }
+        if (transactionEvaluation) {
+          console.log("[processRequestStream] Transaction evaluation:", transactionEvaluation);
+        }
+      } catch (error) {
+        console.error("[processRequestStream] Evaluation/Execution error:", error);
         executionResult = {
           success: false,
           status: "failed" as const,
           privacyLevel: "transparent" as const,
-          message: `Error executing action: ${error instanceof Error ? error.message : String(error)}`,
+          message: `Error processing action: ${error instanceof Error ? error.message : String(error)}`,
           error: error instanceof Error ? error.message : "Unknown error"
         };
       }
@@ -153,6 +170,7 @@ export async function* processRequestStream(username: string, message: string, c
       address?: string; 
       error?: string; 
       executionResult?: any;
+      transactionEvaluation?: any;
       network?: string;
       currency?: string;
     } = {
@@ -174,6 +192,13 @@ export async function* processRequestStream(username: string, message: string, c
       }
     }
     
+    if (transactionEvaluation) {
+      context.transactionEvaluation = transactionEvaluation;
+      if (!transactionEvaluation.success) {
+        context.error = transactionEvaluation.error || transactionEvaluation.message;
+      }
+    }
+    
     // Add wallet info to context if available
     if (user) {
       context.address = user.wallet_address;
@@ -182,12 +207,26 @@ export async function* processRequestStream(username: string, message: string, c
     // 6. Generate Natural Language Response using robust implementation
     try {
       yield "\n";
-      const response = await generateResponse(parsedIntent, context, conversationHistory);
-      fullResponse = response;
+      
+      // If we have a transaction evaluation that requires execution, include it in the response
+      let response = "";
+      if (transactionEvaluation && transactionEvaluation.requiresExecution && transactionEvaluation.success) {
+        // Include transaction evaluation data as JSON in a code block for the frontend to parse
+        const evaluationData = JSON.stringify({
+          type: "transaction_evaluation",
+          evaluation: transactionEvaluation
+        });
+        response = await generateResponse(parsedIntent, context, conversationHistory);
+        // Append evaluation data as a hidden JSON block
+        fullResponse = response + "\n\n```json\n" + evaluationData + "\n```";
+      } else {
+        response = await generateResponse(parsedIntent, context, conversationHistory);
+        fullResponse = response;
+      }
       
       // Stream the response character by character for better UX
-      for (let i = 0; i < response.length; i++) {
-        yield response[i];
+      for (let i = 0; i < fullResponse.length; i++) {
+        yield fullResponse[i];
         // Small delay to simulate streaming (optional, can be removed for faster response)
         if (i % 10 === 0) {
           await new Promise(resolve => setTimeout(resolve, 10));
@@ -212,6 +251,8 @@ export async function* processRequestStream(username: string, message: string, c
       // Fallback response
       const fallbackResponse = executionResult 
         ? `I've processed your request. ${executionResult.message}`
+        : transactionEvaluation
+        ? `Transaction evaluation: ${transactionEvaluation.message}`
         : "I apologize, but I encountered an error while processing your request. Please try again.";
       
       fullResponse = fallbackResponse;

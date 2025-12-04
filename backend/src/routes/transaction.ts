@@ -4,6 +4,7 @@ import { executeIntent } from "../services/executionEngine.js"
 import { ParsedIntent } from "../services/aiAgent.js"
 import { createSwapIntent, checkIntentStatus, getIntentResult } from "../services/nearIntents.js"
 import { getUser } from "../db/database.js"
+import { evaluateTransaction } from "../services/transactionEvaluation.js"
 
 const router: Router = express.Router()
 
@@ -42,6 +43,37 @@ router.post("/send", async (req, res) => {
     res.status(500).json({
       error: "Failed to send transaction",
       message: error instanceof Error ? error.message : "Unknown error"
+    })
+  }
+})
+
+/**
+ * Evaluate a transaction intent and return transaction data for browser execution
+ */
+router.post("/evaluate", async (req, res) => {
+  try {
+    const { intent, username } = req.body
+
+    if (!username) {
+      return res.status(400).json({ error: "Username is required" })
+    }
+
+    if (!intent || typeof intent !== "object") {
+      return res.status(400).json({ error: "Intent is required" })
+    }
+
+    // Evaluate the transaction
+    const evaluation = await evaluateTransaction(intent as ParsedIntent, username)
+
+    res.json(evaluation)
+  } catch (error) {
+    console.error("Evaluate transaction error:", error)
+    res.status(500).json({
+      success: false,
+      requiresExecution: false,
+      intent: req.body.intent,
+      message: error instanceof Error ? error.message : "Unknown error",
+      error: error instanceof Error ? error.message : "Unknown error"
     })
   }
 })
