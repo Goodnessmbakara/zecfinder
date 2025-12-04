@@ -1,6 +1,9 @@
 // Use environment variable if set, otherwise default to localhost for browser
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3001"
 
+// Import demo mode utilities
+import { isDemoMode, mockTransactionEvaluation } from './demoMode'
+
 export interface ChatResponse {
   response: string
   intent: {
@@ -42,7 +45,7 @@ export interface WalletInfo {
 
 export const api = {
   async chat(
-    message: string, 
+    message: string,
     history?: Array<{ role: "user" | "assistant"; content: string }>
   ): Promise<ChatResponse> {
     const response = await fetch(`${API_BASE_URL}/api/chat`, {
@@ -54,11 +57,11 @@ export const api = {
     })
 
     const data = await response.json().catch(() => ({}))
-    
+
     if (!response.ok) {
       // Extract error message from response body if available
       const errorMessage = data.message || data.error || `Chat API error: ${response.statusText}`
-      const error = new Error(errorMessage) as Error & { 
+      const error = new Error(errorMessage) as Error & {
         errorType?: string
         statusCode?: number
       }
@@ -146,6 +149,56 @@ export const api = {
 
     if (!response.ok) {
       throw new Error(`Send transaction error: ${response.statusText}`)
+    }
+
+    return response.json()
+  },
+
+  async evaluateTransaction(intent: any, username: string): Promise<{
+    success: boolean
+    requiresExecution: boolean
+    intent: any
+    transactionData?: {
+      fromAddress: string
+      toAddress: string
+      amount: number
+      currency: string
+      fee?: number
+      privacyLevel: "transparent" | "shielded" | "zero-link"
+      estimatedFee?: number
+      network: "mainnet" | "testnet"
+    }
+    unsignedTransaction?: {
+      method: string
+      params: any[]
+      rpcMethod: string
+    }
+    validation?: {
+      hasSufficientBalance: boolean
+      balance: number
+      requiredAmount: number
+      errors: string[]
+      warnings: string[]
+    }
+    message: string
+    error?: string
+  }> {
+    // Demo mode - use mock evaluation
+    if (isDemoMode()) {
+      const mockIntent = { ...intent, username };
+      return mockTransactionEvaluation(mockIntent);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/transaction/evaluate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ intent, username })
+    })
+
+    if (!response.ok) {
+      throw new Error(`Evaluate transaction error: ${response.statusText}`)
     }
 
     return response.json()
